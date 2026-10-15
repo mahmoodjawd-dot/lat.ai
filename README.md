@@ -10,6 +10,8 @@ It has three parts:
 | **Chrome extension** (`extension/`) | The same Clicky panel in Chrome's right-side panel. It sees the tab you're on (no screen sharing) and draws the secondary cursor **directly on the page**, snapping to the nearest button or link. With voice set up, hold <kbd>ctrl</kbd>+<kbd>option</kbd> on any page to talk. |
 | **Worker** (`worker/`) | One Cloudflare Worker that serves the web home and proxies Claude, ElevenLabs and AssemblyAI, so no API key ever reaches a browser. |
 
+![The Clicky extension: the side panel on the right, and Atlas's cursor pointing at a link on the page](docs/extension-preview.png)
+
 The roster of Clickys lives in one file, `web/shared/clickys.js`. Each Clicky has a name, color, specialty and voice. The web home, the extension and the Worker all read it.
 
 | Clicky | Specialty |
