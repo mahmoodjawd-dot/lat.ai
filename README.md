@@ -49,7 +49,7 @@ Other options: `color` (the triangle and bubble), `placeholder`, `showCursor` (`
 
 1. The SDK writes a text snapshot of the page: where the user is (site, page kind, breadcrumbs, dialogs, prices, what's under their pointer), then the visible links, buttons, fields and headings numbered and tagged by region, a text excerpt, error messages and any site context. No screenshots are taken.
 2. Your request and the snapshot go to the Worker. The Worker calls Claude with the page tools (`point`, `click`, `type`, `select_option`, `scroll`, `navigate`, `read_page`, `set_plan`, `complete_step`) plus the site's own actions.
-3. The SDK runs each tool on the page, animating the cursor to each element first, and sends the results back. This repeats until Claude answers in the card.
+3. The SDK runs each tool on the page, animating the cursor to each element first, and sends the results back. This repeats until Claude answers in the speech bubble.
 4. If an action loads a new page, the SDK saves the task as the page unloads and carries on when the next page opens.
 
 **Safety rails:**
@@ -124,7 +124,7 @@ Run `npm --prefix worker run tail` to watch the Worker's logs live.
 
 ```
 web/
-  cursor-agent.js   the SDK: cursor, card, page snapshot, tools, agent loop (no dependencies)
+  cursor-agent.js   the SDK: triangle cursor, speech bubble, page snapshot, tools, agent loop (no dependencies)
   index.html, blog.html, blog/, signup.html, demo.css, demo.js   the Acme Cloud demo site
 worker/             Cloudflare Worker: serves web/ and runs agent steps (POST /api/agent)
   src/index.ts      route, access control, site-action validation, Claude call
