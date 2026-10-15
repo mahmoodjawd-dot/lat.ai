@@ -1,15 +1,17 @@
 /*
  * Cursor Agent SDK
  *
- * A second cursor, like Clicky's, that trails your own on any page that loads
- * this script. Press ctrl + option (ctrl + alt on Windows/Linux) and a small
- * card pops out of it. Ask anything; the agent reads the page and can:
- *   - Do:           click, type, scroll, navigate and run site actions until it's done
- *   - Explain:      walk you through the page, pointing at each part
- *   - Troubleshoot: read page errors and on-screen messages, find the cause, point at the fix
- *   - Pitch:        guide a visitor through the product using the site's own context
- *   - Guide me:     make a step plan, show progress on the cursor, point at the next
- *                   step and check in automatically as you click, to keep you on track
+ * A second cursor, a small triangle like Clicky's, that trails your own on any
+ * page that loads this script. Press ctrl + option (ctrl + alt on
+ * Windows/Linux) and a speech bubble opens from it. Ask anything: the agent
+ * works out where you are (site, page, section, what your pointer is on) and
+ * what kind of help fits, then does it, narrating in the bubble as the
+ * triangle flies around the page:
+ *   - do things: click, type, choose, scroll, navigate and run site actions
+ *   - explain what's on the page, pointing at each part
+ *   - troubleshoot errors and blocked forms, pointing at the fix
+ *   - pitch the product using context the site provides
+ *   - guide you through a goal step by step, checking in as you click
  *
  *   <script src="https://YOUR-WORKER/cursor-agent.js"></script>
  *   <script>
@@ -41,21 +43,16 @@
     siteContext: "", // what the site owner wants the agent to know (product, pricing, policies)
     actions: [], // site actions: { name, description, parameters (JSON Schema), run(params) }
     hotkey: true, // ctrl + option toggles the card
-    showCursor: "always", // "always": trail the pointer everywhere; "active": only while the card is open or a guide runs
-    label: window.location.hostname || "this page",
-    color: "#2563eb",
+    showCursor: "always", // "always": trail the pointer everywhere; "active": only while the agent is busy or a guide runs
+    color: "#34a56f", // the triangle and speech bubble
+    placeholder: "Ask me anything about this page",
     maxSteps: 20,
     transport: null, // { requestAgentStep(body, signal) } to route requests elsewhere (the extension uses this)
     persistence: null, // { load(), save(state), clear() } to carry tasks and guides across page loads
   };
 
-  const MODES = {
-    explain: { label: "Explain", placeholder: "e.g. what does this page let me do?" },
-    troubleshoot: { label: "Troubleshoot", placeholder: "e.g. why won't this form submit?" },
-    pitch: { label: "Pitch", placeholder: "e.g. why should I choose this?" },
-    guide: { label: "Guide me", placeholder: "e.g. help me set up my account" },
-  };
-  const DEFAULT_PLACEHOLDER = "e.g. find the latest blog post";
+  // The agent picks the right kind of help itself; ask(request, mode) can force one.
+  const MODE_LABELS = { do: "Do", explain: "Explain", troubleshoot: "Troubleshoot", pitch: "Pitch", guide: "Guide me" };
 
   const MAX_SNAPSHOT_ELEMENTS = 200;
   const MAX_PAGE_TEXT_CHARACTERS = 2500;
@@ -70,7 +67,9 @@
   const GUIDE_CHECK_IN_DELAY_MS = 1200;
   const MAX_GUIDE_CHECK_INS = 40;
   const COMPACT_CONVERSATION_AFTER_MESSAGES = 40;
-  const CURSOR_BUBBLE_DURATION_MS = 9000;
+  const ANSWER_MIN_LINGER_MS = 6000;
+  const ANSWER_LINGER_PER_WORD_MS = 350;
+  const CONVERSATION_IDLE_RESET_MS = 5 * 60 * 1000;
 
   // ===================================================================
   // Page snapshot: what the agent "sees"
@@ -152,7 +151,8 @@
   }
 
   function describeElement(element) {
-    const descriptionParts = [describeElementKind(element)];
+    const region = describeRegion(element);
+    const descriptionParts = [region ? `(${region}) ${describeElementKind(element)}` : describeElementKind(element)];
     const accessibleName = getAccessibleName(element);
     if (accessibleName) descriptionParts.push(`"${accessibleName}"`);
 
@@ -195,12 +195,157 @@
     return [...errorMessages];
   }
 
+  // ---------- orientation: where on the web the user is ----------
+
+  const REGION_SELECTOR = "nav, header, footer, aside, dialog, [role='navigation'], [role='banner'], [role='contentinfo'], [role='complementary'], [role='dialog'], [role='menu'], [role='search'], form";
+  const PRICE_PATTERN = /(?:[$€£¥₹]\s?\d[\d,.]*(?:\s?\/\s?(?:month|mo|year|yr)\b)?|\d[\d,.]*\s?(?:USD|EUR|GBP))/g;
+
+  /** A short tag for the part of the page an element sits in, e.g. "nav" or "form: Sign up". */
+  function describeRegion(element) {
+    const regionElement = element.parentElement?.closest(REGION_SELECTOR);
+    if (!regionElement) return "";
+    const role = regionElement.getAttribute("role");
+    const tagName = regionElement.tagName.toLowerCase();
+    const regionKind =
+      { navigation: "nav", banner: "header", contentinfo: "footer", complementary: "aside" }[role] ?? role ?? tagName;
+    if (regionKind === "form" || regionKind === "dialog" || regionKind === "search") {
+      const regionName = collapseWhitespace(
+        regionElement.getAttribute("aria-label") || regionElement.querySelector("h1, h2, h3, legend")?.innerText || "",
+        40,
+      );
+      return regionName ? `${regionKind}: ${regionName}` : regionKind;
+    }
+    return regionKind;
+  }
+
+  function readStructuredData() {
+    const structuredTypes = new Set();
+    const structuredFacts = [];
+    for (const scriptElement of document.querySelectorAll('script[type="application/ld+json"]')) {
+      let parsedData;
+      try {
+        parsedData = JSON.parse(scriptElement.textContent);
+      } catch {
+        continue;
+      }
+      const pendingNodes = Array.isArray(parsedData) ? [...parsedData] : [parsedData];
+      while (pendingNodes.length && structuredFacts.length < 8) {
+        const node = pendingNodes.shift();
+        if (!node || typeof node !== "object") continue;
+        if (Array.isArray(node["@graph"])) pendingNodes.push(...node["@graph"]);
+        const nodeTypes = [].concat(node["@type"] ?? []);
+        nodeTypes.forEach((nodeType) => structuredTypes.add(String(nodeType)));
+        if (nodeTypes.includes("Product") && node.name) {
+          const offer = [].concat(node.offers ?? [])[0];
+          const offerPrice = offer?.price ?? offer?.lowPrice;
+          structuredFacts.push(`Product: ${collapseWhitespace(node.name, 80)}${offerPrice ? ` at ${offerPrice} ${offer.priceCurrency ?? ""}`.trimEnd() : ""}`);
+        }
+        if (nodeTypes.includes("BreadcrumbList") && Array.isArray(node.itemListElement)) {
+          const crumbNames = node.itemListElement.map((crumb) => crumb.name ?? crumb.item?.name).filter(Boolean);
+          if (crumbNames.length) structuredFacts.push(`Breadcrumbs: ${crumbNames.join(" › ")}`);
+        }
+      }
+    }
+    return { structuredTypes: [...structuredTypes].slice(0, 8), structuredFacts };
+  }
+
+  function readBreadcrumbs() {
+    const breadcrumbElement = document.querySelector("[aria-label*='breadcrumb' i], .breadcrumb, .breadcrumbs, [class*='breadcrumb' i]");
+    if (!breadcrumbElement || !isRendered(breadcrumbElement)) return "";
+    const crumbTexts = [...breadcrumbElement.querySelectorAll("a, li, span")]
+      .map((crumbElement) => collapseWhitespace(crumbElement.innerText, 40))
+      .filter((crumbText, crumbIndex, allCrumbs) => crumbText && allCrumbs.indexOf(crumbText) === crumbIndex);
+    return crumbTexts.slice(0, 8).join(" › ");
+  }
+
+  function findOpenDialog(hostElementToIgnore) {
+    const dialogElement = [...document.querySelectorAll("dialog[open], [role='dialog'], [aria-modal='true']")].find(
+      (candidate) => candidate !== hostElementToIgnore && isRendered(candidate),
+    );
+    if (!dialogElement) return "";
+    return collapseWhitespace(
+      dialogElement.getAttribute("aria-label") || dialogElement.querySelector("h1, h2, h3")?.innerText || dialogElement.innerText,
+      100,
+    );
+  }
+
+  /** Prices with a few words of what they belong to, e.g. "Pro: $20 / month". */
+  function findPricesOnScreen(mainContentElement) {
+    const textLines = (mainContentElement?.innerText ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+    const priceMentions = [];
+    textLines.forEach((line, lineIndex) => {
+      for (const priceMatch of line.matchAll(PRICE_PATTERN)) {
+        const lineWithoutPrice = line.replace(priceMatch[0], "").replace(/[\s:–—-]+$/, "").trim();
+        // A line that is only the price takes its label from the line above (a plan or product name).
+        const priceLabel = lineWithoutPrice.length >= 3 ? lineWithoutPrice : textLines[lineIndex - 1] ?? "";
+        priceMentions.push(`${collapseWhitespace(priceLabel, 50)}: ${priceMatch[0]}${lineWithoutPrice.length < 3 && lineWithoutPrice ? ` ${lineWithoutPrice}` : ""}`);
+        if (priceMentions.length >= 8) return;
+      }
+    });
+    return [...new Set(priceMentions)].slice(0, 8);
+  }
+
+  /** What the user's own pointer is resting on, so "what is this?" has an answer. */
+  function describeElementUnderPointer(pointerPosition, elementsById, hostElementToIgnore) {
+    if (!pointerPosition) return "";
+    const elementAtPointer = document.elementFromPoint(pointerPosition.x, pointerPosition.y);
+    if (!elementAtPointer || elementAtPointer === hostElementToIgnore || elementAtPointer === document.body || elementAtPointer === document.documentElement) {
+      return "";
+    }
+    for (const [elementId, element] of elementsById) {
+      if (element === elementAtPointer || element.contains(elementAtPointer)) return `[${elementId}] ${describeElement(element)}`;
+    }
+    const blockElement = elementAtPointer.closest("p, li, td, th, figure, section, article, div") ?? elementAtPointer;
+    const imageAlt = elementAtPointer.tagName === "IMG" ? elementAtPointer.getAttribute("alt") : "";
+    return imageAlt ? `image "${collapseWhitespace(imageAlt, 80)}"` : `text "${collapseWhitespace(blockElement.innerText, 140)}"`;
+  }
+
+  function describeWhereTheUserIs({ hostElementToIgnore, mainContentElement, pointerPosition, elementsById }) {
+    const siteName =
+      document.querySelector('meta[property="og:site_name"]')?.content ||
+      document.querySelector('meta[name="application-name"]')?.content ||
+      location.hostname.replace(/^www\./, "");
+    const openGraphType = document.querySelector('meta[property="og:type"]')?.content;
+    const { structuredTypes, structuredFacts } = readStructuredData();
+    const formsOnPage = [...document.forms].filter(isRendered);
+    const formHints = formsOnPage
+      .map((formElement) => {
+        const formText = `${formElement.getAttribute("aria-label") ?? ""} ${formElement.querySelector("button, [type=submit]")?.innerText ?? ""} ${formElement.action ?? ""}`.toLowerCase();
+        if (/sign ?in|log ?in/.test(formText)) return "sign-in form";
+        if (/sign ?up|register|create account/.test(formText)) return "sign-up form";
+        if (/checkout|payment|place order/.test(formText)) return "checkout form";
+        if (/search/.test(formText)) return "search form";
+        return null;
+      })
+      .filter(Boolean);
+    const pageKindHints = [openGraphType, ...structuredTypes, ...new Set(formHints)].filter(Boolean);
+    const breadcrumbs = readBreadcrumbs();
+    const openDialog = findOpenDialog(hostElementToIgnore);
+    const headingsInView = [...document.querySelectorAll("h1, h2")]
+      .filter((headingElement) => isRendered(headingElement) && isInViewport(headingElement))
+      .map((headingElement) => collapseWhitespace(headingElement.innerText, 60))
+      .slice(0, 4);
+    const pricesOnScreen = findPricesOnScreen(mainContentElement);
+    const underPointer = describeElementUnderPointer(pointerPosition, elementsById, hostElementToIgnore);
+
+    return [
+      `Site: ${siteName}`,
+      pageKindHints.length ? `Page kind hints: ${pageKindHints.join(", ")}` : null,
+      breadcrumbs ? `Breadcrumbs: ${breadcrumbs}` : null,
+      ...structuredFacts,
+      openDialog ? `A dialog or popup is open: ${openDialog}` : null,
+      headingsInView.length ? `On screen now: ${headingsInView.join(" / ")}` : null,
+      pricesOnScreen.length ? `Prices on the page: ${pricesOnScreen.join("; ")}` : null,
+      underPointer ? `The user's pointer is on: ${underPointer}` : null,
+    ].filter(Boolean);
+  }
+
   /**
    * Numbers the page's visible interactive elements and headings, on-screen
    * ones first, and returns the text the agent reads plus an id → element map
    * for the tools. Ids only stay valid until the next snapshot.
    */
-  function takePageSnapshot({ hostElementToIgnore, recentPageErrors, siteContext }) {
+  function takePageSnapshot({ hostElementToIgnore, recentPageErrors, siteContext, pointerPosition }) {
     const candidateElements = [...document.querySelectorAll(`${INTERACTIVE_ELEMENT_SELECTOR}, ${CONTEXT_ELEMENT_SELECTOR}`)].filter(
       (element) => element !== hostElementToIgnore && !isSensitiveField(element) && isRendered(element),
     );
@@ -227,8 +372,11 @@
     const pageTextExcerpt = collapseWhitespace(mainContentElement?.innerText ?? "", MAX_PAGE_TEXT_CHARACTERS);
     const onScreenErrorMessages = collectOnScreenErrorMessages(hostElementToIgnore);
     const pageErrors = [...new Set([...recentPageErrors, ...collectBrokenImages()])];
+    const whereTheUserIs = describeWhereTheUserIs({ hostElementToIgnore, mainContentElement, pointerPosition, elementsById });
 
     const snapshotText = [
+      "Where the user is:",
+      ...whereTheUserIs,
       `Page title: ${document.title}`,
       `URL: ${location.href}`,
       metaDescription ? `Description: ${collapseWhitespace(metaDescription, 200)}` : null,
@@ -252,348 +400,253 @@
   }
 
   // ===================================================================
-  // UI: the secondary cursor and the pop-up card (inside a shadow root)
+  // UI: the agent's triangle cursor and its speech bubble (in a shadow root)
   // ===================================================================
+
+  // The triangle's tip sits at the agent element's origin, so translating the
+  // element to a point puts the tip exactly there, and rotation pivots on it.
+  const IDLE_TRIANGLE_ANGLE_DEGREES = -18;
+  const TRAIL_OFFSET_X = 30;
+  const TRAIL_OFFSET_Y = 30;
 
   const UI_STYLES = `
     :host { all: initial; }
     .layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483647;
-      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; color: #111827; }
+      font: 600 15px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased; }
     [hidden] { display: none !important; }
 
-    .cursor { position: absolute; left: 0; top: 0; opacity: 0; transition: opacity 200ms ease; will-change: transform; }
-    .cursor.visible { opacity: 1; }
-    .triangle { display: block; filter: drop-shadow(0 0 6px var(--agent-color)) drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
-    .ring { position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%;
+    .agent { position: absolute; left: 0; top: 0; will-change: transform; opacity: 0; transition: opacity 220ms ease; }
+    .agent.visible { opacity: 1; }
+    .triangle { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
+    .triangle svg { position: absolute; left: -19px; top: -9px; overflow: visible;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 7px color-mix(in srgb, var(--agent-color) 55%, transparent)); }
+    .ring { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; border-radius: 50%;
       border: 2px solid var(--agent-color); opacity: 0; }
-    .cursor.clicking .ring { animation: ring 650ms ease-out; }
-    @keyframes ring { from { transform: scale(.3); opacity: .95; } to { transform: scale(2); opacity: 0; } }
-    .cursor-label { position: absolute; left: 20px; top: -24px; white-space: nowrap; padding: 2px 8px; border-radius: 999px;
-      background: var(--agent-color); color: #fff; font-size: 12px; font-weight: 600; opacity: 0; transition: opacity 150ms; }
-    .cursor-label.visible { opacity: 1; }
-    .cursor-pill { position: absolute; left: 22px; top: 18px; max-width: 240px; padding: 3px 9px; border-radius: 999px;
-      background: #111827; color: #fff; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      box-shadow: 0 2px 8px rgba(0,0,0,.25); }
-    .cursor-bubble { position: absolute; left: 22px; top: 44px; width: max-content; max-width: 260px; padding: 8px 11px;
-      border-radius: 4px 12px 12px 12px; background: #fff; color: #111827; font-size: 13px;
-      box-shadow: 0 6px 24px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.06); }
-    .cursor.flip-x .cursor-label, .cursor.flip-x .cursor-pill { left: auto; right: 6px; }
-    .cursor.flip-x .cursor-bubble { left: auto; right: 6px; border-radius: 12px 4px 12px 12px; }
-    .cursor.flip-y .cursor-bubble { top: auto; bottom: 34px; }
+    .agent.clicking .ring { animation: ring 650ms ease-out; }
+    @keyframes ring { from { transform: scale(.3); opacity: .9; } to { transform: scale(2); opacity: 0; } }
 
-    .card { position: absolute; width: 344px; max-width: calc(100vw - 24px); pointer-events: auto; background: #fff;
-      border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.06); overflow: hidden;
-      opacity: 0; transform: translateY(4px) scale(.98); transition: opacity 140ms ease, transform 140ms ease; }
-    .card.open { opacity: 1; transform: none; }
-    .card-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 10px 16px;
-      border-bottom: 1px solid #ececef; }
-    .card-title { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: #6b7280;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .icon-button { width: 26px; height: 26px; border: 0; border-radius: 8px; background: transparent; color: #6b7280;
-      font-size: 18px; line-height: 1; cursor: pointer; }
-    .icon-button:hover { background: #f3f4f6; color: #111827; }
-    .ask-form { display: flex; gap: 8px; padding: 12px 12px 8px; }
-    .ask-input { flex: 1; min-width: 0; padding: 9px 12px; border: 1.5px solid #d1d5db; border-radius: 10px; font: inherit;
-      color: #111827; background: #fff; outline: none; }
-    .ask-input:focus { border-color: #111827; }
-    .ask-input::placeholder { color: #9ca3af; }
-    .go-button { padding: 0 14px; border: 0; border-radius: 10px; background: #111827; color: #fff; font: inherit;
-      font-weight: 600; cursor: pointer; }
-    .go-button:disabled { background: #9ca3af; cursor: default; }
-    .go-button.stop { background: #ef4444; }
-    .modes { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 12px; }
-    .mode-chip { padding: 4px 9px; border: 1px solid #e5e7eb; border-radius: 999px; background: #f9fafb; color: #374151;
-      font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
-    .mode-chip:hover { border-color: #9ca3af; }
-    .mode-chip[aria-pressed="true"] { background: var(--agent-color); border-color: var(--agent-color); color: #fff; }
-    button:focus-visible { outline: 2px solid var(--agent-color); outline-offset: 2px; }
+    .stack { position: absolute; left: -20px; top: 22px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .agent.flip-x .stack { left: auto; right: -6px; align-items: flex-end; }
+    .agent.flip-y .stack { top: auto; bottom: 22px; flex-direction: column-reverse; }
 
-    .plan { margin: 0 12px 12px; padding: 10px 12px; border-radius: 12px; background: #f6f7f9; }
-    .plan-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-    .plan-goal { font-size: 13px; font-weight: 600; }
-    .end-guide { border: 0; background: transparent; color: #6b7280; font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; }
-    .plan-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; counter-reset: plan; }
-    .plan-step { display: flex; gap: 8px; font-size: 13px; color: #374151; counter-increment: plan; }
-    .plan-step::before { content: counter(plan); flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #d1d5db;
-      font-size: 11px; font-weight: 600; display: grid; place-items: center; color: #6b7280; }
-    .plan-step.current { color: #111827; font-weight: 600; }
-    .plan-step.current::before { border-color: var(--agent-color); color: var(--agent-color); }
-    .plan-step.done { color: #9ca3af; text-decoration: line-through; }
-    .plan-step.done::before { content: "✓"; background: var(--agent-color); border-color: var(--agent-color); color: #fff; }
+    .bubble { pointer-events: auto; box-sizing: border-box; width: max-content; min-width: 120px; max-width: min(380px, calc(100vw - 32px));
+      padding: 10px 14px; border-radius: 11px; color: #fff;
+      background: color-mix(in srgb, var(--agent-color) 90%, transparent);
+      box-shadow: 0 8px 24px rgba(0,0,0,.22), inset 0 0 0 1px rgba(255,255,255,.12);
+      -webkit-backdrop-filter: blur(10px) saturate(1.3); backdrop-filter: blur(10px) saturate(1.3);
+      transform-origin: top left; animation: pop 160ms ease-out; }
+    .agent.flip-x .bubble { transform-origin: top right; }
+    @keyframes pop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+    .bubble.error { background: color-mix(in srgb, #c2410c 92%, transparent); }
+    .bubble.answer { cursor: pointer; }
+    .bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
+    .bubble.working .bubble-text::after { content: ""; display: inline-block; width: 1.2em; text-align: left;
+      animation: dots 1.2s steps(4, end) infinite; }
+    @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+    .bubble-input { display: block; width: 300px; max-width: 100%; margin: 0; padding: 0; border: 0; outline: none; background: transparent;
+      color: #fff; font: inherit; caret-color: #fff; }
+    .bubble-input::placeholder { color: rgba(255,255,255,.72); }
+    .bubble-hint { margin-top: 6px; font-size: 11.5px; font-weight: 500; color: rgba(255,255,255,.72); }
 
-    .output { padding: 0 16px 14px; display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; }
-    .output:empty { display: none; }
-    .steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-    .step { display: flex; gap: 8px; align-items: baseline; font-size: 13px; color: #6b7280; }
-    .step::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #d1d5db; transform: translateY(-1px); }
-    .step.active { color: #111827; }
-    .step.active::before { background: var(--agent-color); animation: pulse 900ms infinite; }
-    @keyframes pulse { 50% { opacity: .3; } }
-    .answer { white-space: pre-wrap; color: #111827; }
-    .answer:empty, .error:empty, .steps:empty { display: none; }
-    .error { font-size: 13px; color: #b91c1c; }
+    .label { pointer-events: none; padding: 3px 9px; border-radius: 999px; background: #fff; color: color-mix(in srgb, var(--agent-color) 80%, #000);
+      font-size: 12px; font-weight: 700; box-shadow: 0 2px 8px rgba(0,0,0,.18); animation: pop 140ms ease-out; }
+
+    .plan-chip { pointer-events: auto; display: flex; align-items: center; gap: 8px; max-width: 320px; padding: 5px 6px 5px 11px; border-radius: 999px;
+      background: rgba(17, 24, 39, .88); color: #fff; font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.22);
+      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+    .plan-count { flex: none; color: var(--agent-color); filter: brightness(1.35); }
+    .plan-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .plan-end { flex: none; width: 20px; height: 20px; border: 0; border-radius: 50%; background: rgba(255,255,255,.12); color: #fff;
+      font: 600 13px/1 system-ui, sans-serif; cursor: pointer; }
+    .plan-end:hover { background: rgba(255,255,255,.25); }
+    button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+    @media (prefers-reduced-motion: reduce) { .bubble, .label { animation: none; } }
   `;
 
-  function createAgentInterface({ color, label, onSubmit, onStop, onClose, onEndGuide }) {
+  function createAgentInterface({ color, onSubmit, onDismiss, onEndGuide, onAnswerClick }) {
     const hostElement = document.createElement("cursor-agent");
     const shadowRoot = hostElement.attachShadow({ mode: "open" });
-    const modeChipsMarkup = Object.entries(MODES)
-      .map(([modeKey, mode]) => `<button type="button" class="mode-chip" data-mode="${modeKey}" aria-pressed="false">${mode.label}</button>`)
-      .join("");
     shadowRoot.innerHTML = `
       <style>${UI_STYLES}</style>
       <div class="layer">
-        <div class="cursor">
+        <div class="agent">
           <div class="ring"></div>
-          <svg class="triangle" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M2 2 L22 10 L12.5 12.5 L10 22 Z" fill="var(--agent-color)" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
-          </svg>
-          <div class="cursor-label"></div>
-          <div class="cursor-pill" hidden></div>
-          <div class="cursor-bubble" hidden></div>
-        </div>
-        <div class="card" role="dialog" aria-label="Cursor Agent" hidden>
-          <div class="card-header">
-            <span class="card-title"></span>
-            <button type="button" class="icon-button close-button" aria-label="Close">×</button>
+          <div class="triangle">
+            <svg width="22" height="18" viewBox="-19 -9 22 18" aria-hidden="true">
+              <path d="M1.5 0 L-17 -7.5 Q-18.6 -8.1 -18.2 -6.4 L-15.5 0 L-18.2 6.4 Q-18.6 8.1 -17 7.5 Z" fill="var(--agent-color)" stroke="rgba(255,255,255,.9)" stroke-width="1.2" stroke-linejoin="round"/>
+            </svg>
           </div>
-          <form class="ask-form">
-            <input class="ask-input" type="text" autocomplete="off" aria-label="Ask Cursor Agent">
-            <button type="submit" class="go-button" disabled>Go</button>
-          </form>
-          <div class="modes" role="group" aria-label="Mode">${modeChipsMarkup}</div>
-          <div class="plan" hidden>
-            <div class="plan-header"><span class="plan-goal"></span><button type="button" class="end-guide">End guide</button></div>
-            <ol class="plan-steps"></ol>
-          </div>
-          <div class="output" aria-live="polite">
-            <ol class="steps"></ol>
-            <div class="answer"></div>
-            <div class="error" role="alert"></div>
+          <div class="stack">
+            <div class="label" hidden></div>
+            <form class="bubble" hidden aria-live="polite">
+              <div class="bubble-text"></div>
+              <input class="bubble-input" type="text" autocomplete="off" aria-label="Ask Cursor Agent" hidden>
+              <div class="bubble-hint" hidden></div>
+            </form>
+            <div class="plan-chip" hidden>
+              <span class="plan-count"></span><span class="plan-text"></span>
+              <button type="button" class="plan-end" aria-label="End guide" title="End guide">×</button>
+            </div>
           </div>
         </div>
       </div>`;
     const select = (selector) => shadowRoot.querySelector(selector);
     const layerElement = select(".layer");
-    const cursorElement = select(".cursor");
-    const cursorLabelElement = select(".cursor-label");
-    const cursorPillElement = select(".cursor-pill");
-    const cursorBubbleElement = select(".cursor-bubble");
-    const cardElement = select(".card");
-    const askFormElement = select(".ask-form");
-    const askInputElement = select(".ask-input");
-    const goButtonElement = select(".go-button");
-    const planElement = select(".plan");
-    const planGoalElement = select(".plan-goal");
-    const planStepsElement = select(".plan-steps");
-    const outputElement = select(".output");
-    const stepsElement = select(".steps");
-    const answerElement = select(".answer");
-    const errorElement = select(".error");
+    const agentElement = select(".agent");
+    const triangleElement = select(".triangle");
+    const labelElement = select(".label");
+    const bubbleElement = select(".bubble");
+    const bubbleTextElement = select(".bubble-text");
+    const bubbleInputElement = select(".bubble-input");
+    const bubbleHintElement = select(".bubble-hint");
+    const planChipElement = select(".plan-chip");
+    const planCountElement = select(".plan-count");
+    const planTextElement = select(".plan-text");
     layerElement.style.setProperty("--agent-color", color);
-    select(".card-title").textContent = `Cursor Agent · ${label}`;
-    askInputElement.placeholder = DEFAULT_PLACEHOLDER;
     document.documentElement.appendChild(hostElement);
 
-    let isWorking = false;
-    let selectedMode = null;
-    let cursorBubbleTimeoutId = null;
-    const cursorPosition = { x: innerWidth / 2, y: innerHeight / 2 };
-    let cursorIsBusy = false; // flying to or holding on an element instead of trailing the pointer
+    const agentPosition = { x: innerWidth / 2, y: innerHeight / 2 };
+    let triangleAngle = IDLE_TRIANGLE_ANGLE_DEGREES;
+    let agentIsBusy = false; // flying to or holding on an element instead of trailing the pointer
+    let bubbleState = "hidden"; // hidden | input | working | answer | error
+    let bubbleHideTimeoutId = null;
 
-    function renderCursor() {
-      cursorElement.style.transform = `translate3d(${cursorPosition.x}px, ${cursorPosition.y}px, 0)`;
-      cursorElement.classList.toggle("flip-x", cursorPosition.x > innerWidth - 290);
-      cursorElement.classList.toggle("flip-y", cursorPosition.y > innerHeight - 180);
+    function render() {
+      agentElement.style.transform = `translate3d(${agentPosition.x}px, ${agentPosition.y}px, 0)`;
+      triangleElement.style.transform = `rotate(${triangleAngle}deg)`;
+      agentElement.classList.toggle("flip-x", agentPosition.x > innerWidth - 400);
+      agentElement.classList.toggle("flip-y", agentPosition.y > innerHeight - 190);
     }
-    renderCursor();
+    render();
 
-    function updateGoButton() {
-      goButtonElement.textContent = isWorking ? "Stop" : "Go";
-      goButtonElement.classList.toggle("stop", isWorking);
-      goButtonElement.disabled = !isWorking && !askInputElement.value.trim();
-    }
-
-    function selectMode(modeKey) {
-      selectedMode = selectedMode === modeKey ? null : modeKey;
-      for (const modeChipElement of shadowRoot.querySelectorAll(".mode-chip")) {
-        modeChipElement.setAttribute("aria-pressed", String(modeChipElement.dataset.mode === selectedMode));
+    function setBubble(state, text, { placeholder, hint } = {}) {
+      clearTimeout(bubbleHideTimeoutId);
+      bubbleState = state;
+      bubbleElement.hidden = state === "hidden";
+      bubbleElement.className = `bubble ${state}`;
+      const isInput = state === "input";
+      bubbleInputElement.hidden = !isInput;
+      bubbleTextElement.hidden = isInput;
+      bubbleHintElement.hidden = !hint;
+      bubbleHintElement.textContent = hint ?? "";
+      if (isInput) {
+        bubbleInputElement.placeholder = placeholder ?? "";
+        bubbleInputElement.value = "";
+        bubbleInputElement.focus({ preventScroll: true }); // right away, so typing straight after the hotkey isn't lost
+      } else {
+        bubbleTextElement.textContent = text ?? "";
+        bubbleTextElement.scrollTop = bubbleTextElement.scrollHeight;
       }
-      askInputElement.placeholder = selectedMode ? MODES[selectedMode].placeholder : DEFAULT_PLACEHOLDER;
-      askInputElement.focus();
+      if (state !== "hidden") agentElement.classList.add("visible");
     }
 
-    askInputElement.addEventListener("input", updateGoButton);
-    askFormElement.addEventListener("submit", (submitEvent) => {
+    bubbleElement.addEventListener("submit", (submitEvent) => {
       submitEvent.preventDefault();
-      if (isWorking) {
-        onStop();
-        return;
-      }
-      const request = askInputElement.value.trim();
-      if (request) {
-        askInputElement.value = "";
-        updateGoButton();
-        onSubmit(request, selectedMode);
-      }
+      const request = bubbleInputElement.value.trim();
+      if (bubbleState === "input" && request) onSubmit(request);
     });
-    for (const modeChipElement of shadowRoot.querySelectorAll(".mode-chip")) {
-      modeChipElement.addEventListener("click", () => selectMode(modeChipElement.dataset.mode));
-    }
-    select(".close-button").addEventListener("click", onClose);
-    select(".end-guide").addEventListener("click", onEndGuide);
-    // Keep the page's own shortcuts from firing while typing in the card.
+    bubbleElement.addEventListener("click", () => {
+      if (bubbleState === "answer" || bubbleState === "error") onAnswerClick();
+    });
+    select(".plan-end").addEventListener("click", onEndGuide);
+    // Keep the page's own shortcuts from firing while typing in the bubble.
     for (const keyboardEventType of ["keydown", "keyup", "keypress"]) {
-      cardElement.addEventListener(keyboardEventType, (keyboardEvent) => {
-        if (keyboardEvent.key === "Escape" && keyboardEventType === "keydown") onClose();
+      bubbleElement.addEventListener(keyboardEventType, (keyboardEvent) => {
+        if (keyboardEvent.key === "Escape" && keyboardEventType === "keydown") onDismiss();
         keyboardEvent.stopPropagation();
       });
     }
 
-    /** Places the card beside a point, flipped to stay on screen. */
-    function placeCard(anchorX, anchorY) {
-      const cardWidth = Math.min(344, innerWidth - 24);
-      const estimatedCardHeight = 300;
-      const left = anchorX + 18 + cardWidth > innerWidth - 12 ? anchorX - 18 - cardWidth : anchorX + 18;
-      const top = anchorY + 14 + estimatedCardHeight > innerHeight - 12 ? Math.max(12, anchorY - estimatedCardHeight) : anchorY + 14;
-      cardElement.style.left = `${Math.max(12, left)}px`;
-      cardElement.style.top = `${Math.max(12, top)}px`;
-    }
-
     return {
       hostElement,
-      isCardOpen: () => !cardElement.hidden,
-      openCard(anchorX, anchorY) {
-        placeCard(anchorX, anchorY);
-        cardElement.hidden = false;
-        requestAnimationFrame(() => cardElement.classList.add("open"));
-        cursorBubbleElement.hidden = true;
-        if (!cursorIsBusy) {
-          cursorPosition.x = anchorX;
-          cursorPosition.y = anchorY;
-          renderCursor();
-        }
-        cursorElement.classList.add("visible");
-        askInputElement.focus({ preventScroll: true }); // right away, so typing straight after the hotkey isn't lost
+      getBubbleState: () => bubbleState,
+      isTyping: () => bubbleState === "input",
+      isBubbleVisible: () => bubbleState !== "hidden",
+      showInput(placeholder, hint) {
+        setBubble("input", null, { placeholder, hint });
       },
-      closeCard() {
-        cardElement.classList.remove("open");
-        cardElement.hidden = true;
+      showStatus(statusText) {
+        setBubble("working", statusText);
       },
-      getCardAnchor() {
-        return { x: parseFloat(cardElement.style.left) - 18, y: parseFloat(cardElement.style.top) - 14 };
+      showAnswer(answerText, lingerMs) {
+        setBubble("answer", answerText);
+        if (lingerMs) bubbleHideTimeoutId = setTimeout(() => setBubble("hidden"), lingerMs);
       },
-      getSelectedMode: () => selectedMode,
-      setSelectedMode(modeKey) {
-        if (selectedMode !== modeKey) selectMode(modeKey);
+      showError(errorText) {
+        setBubble("error", errorText, { hint: "Click to try again · esc to close" });
       },
-      setWorking(working) {
-        isWorking = working;
-        askInputElement.disabled = working;
-        updateGoButton();
-        if (!working && !cardElement.hidden) askInputElement.focus();
-      },
-      clearOutput() {
-        stepsElement.innerHTML = "";
-        answerElement.textContent = "";
-        errorElement.textContent = "";
-      },
-      addStep(stepText) {
-        stepsElement.querySelector(".step.active")?.classList.remove("active");
-        const stepElement = document.createElement("li");
-        stepElement.className = "step active";
-        stepElement.textContent = stepText;
-        stepsElement.appendChild(stepElement);
-        outputElement.scrollTop = outputElement.scrollHeight;
-      },
-      finishSteps() {
-        stepsElement.querySelector(".step.active")?.classList.remove("active");
-      },
-      getSteps: () => [...stepsElement.children].map((stepElement) => stepElement.textContent),
-      setAnswer(answerText) {
-        answerElement.textContent = answerText;
-        outputElement.scrollTop = outputElement.scrollHeight;
-        // With the card closed (a guide running in the background), say it from the cursor, Clicky-style.
-        if (cardElement.hidden && answerText) {
-          cursorBubbleElement.textContent = answerText;
-          cursorBubbleElement.hidden = false;
-          clearTimeout(cursorBubbleTimeoutId);
-          cursorBubbleTimeoutId = setTimeout(() => (cursorBubbleElement.hidden = true), CURSOR_BUBBLE_DURATION_MS);
-        }
-      },
-      setError(errorText) {
-        errorElement.textContent = errorText;
+      hideBubble() {
+        setBubble("hidden");
       },
       renderPlan(activePlan) {
-        planElement.hidden = !activePlan;
-        cursorPillElement.hidden = !activePlan;
+        planChipElement.hidden = !activePlan;
         if (!activePlan) return;
-        planGoalElement.textContent = activePlan.goal;
-        planStepsElement.innerHTML = "";
         const currentStepIndex = activePlan.steps.findIndex((planStep) => !planStep.done);
-        activePlan.steps.forEach((planStep, planStepIndex) => {
-          const planStepElement = document.createElement("li");
-          planStepElement.className = `plan-step${planStep.done ? " done" : ""}${planStepIndex === currentStepIndex ? " current" : ""}`;
-          planStepElement.textContent = planStep.text;
-          planStepsElement.appendChild(planStepElement);
-        });
         const doneCount = activePlan.steps.filter((planStep) => planStep.done).length;
-        cursorPillElement.textContent =
-          currentStepIndex === -1
-            ? `All ${activePlan.steps.length} steps done`
-            : `${doneCount + 1}/${activePlan.steps.length} · ${activePlan.steps[currentStepIndex].text}`;
+        planCountElement.textContent = currentStepIndex === -1 ? "Done" : `${doneCount + 1}/${activePlan.steps.length}`;
+        planTextElement.textContent = currentStepIndex === -1 ? activePlan.goal : activePlan.steps[currentStepIndex].text;
+        planChipElement.title = activePlan.steps.map((planStep, index) => `${planStep.done ? "✓" : `${index + 1}.`} ${planStep.text}`).join("\n");
+        agentElement.classList.add("visible");
       },
       showCursor() {
-        cursorElement.classList.add("visible");
+        agentElement.classList.add("visible");
       },
       hideCursor() {
-        cursorElement.classList.remove("visible");
-        cursorLabelElement.classList.remove("visible");
-        cursorBubbleElement.hidden = true;
+        agentElement.classList.remove("visible");
+        labelElement.hidden = true;
       },
       followPointer(x, y) {
-        if (!cursorIsBusy) {
-          cursorPosition.x = x + 16;
-          cursorPosition.y = y + 14;
-          renderCursor();
-        }
+        // Hold still while the user types, so the bubble doesn't run away from them.
+        if (agentIsBusy || bubbleState === "input") return;
+        agentPosition.x = x + TRAIL_OFFSET_X;
+        agentPosition.y = y + TRAIL_OFFSET_Y;
+        triangleAngle += (IDLE_TRIANGLE_ANGLE_DEGREES - triangleAngle) * 0.25;
+        render();
       },
-      setCursorLabel(labelText) {
-        cursorLabelElement.textContent = labelText ?? "";
-        cursorLabelElement.classList.toggle("visible", Boolean(labelText));
+      setPointLabel(labelText) {
+        labelElement.textContent = labelText ?? "";
+        labelElement.hidden = !labelText;
       },
-      /** Flies the cursor tip to (x, y) along a curved arc; resolves on arrival. */
-      flyCursorTo(targetX, targetY) {
-        cursorIsBusy = true;
-        cursorElement.classList.add("visible");
-        const start = { ...cursorPosition };
+      /** Flies the triangle's tip to (x, y) along a curved arc, turning to face where it's going. */
+      flyTo(targetX, targetY) {
+        agentIsBusy = true;
+        agentElement.classList.add("visible");
+        const start = { ...agentPosition };
         const flightDistance = Math.hypot(targetX - start.x, targetY - start.y);
-        const control = { x: (start.x + targetX) / 2, y: Math.min(start.y, targetY) - Math.min(200, flightDistance * 0.35) };
-        const durationMs = Math.max(350, Math.min(900, 300 + flightDistance * 0.45));
+        const control = { x: (start.x + targetX) / 2, y: Math.min(start.y, targetY) - Math.min(180, flightDistance * 0.3) };
+        const durationMs = Math.max(380, Math.min(950, 320 + flightDistance * 0.45));
         const startTime = performance.now();
         return new Promise((resolve) => {
           function flightFrame(now) {
             const progress = Math.min((now - startTime) / durationMs, 1);
             const eased = progress * progress * (3 - 2 * progress);
             const remaining = 1 - eased;
-            cursorPosition.x = remaining * remaining * start.x + 2 * remaining * eased * control.x + eased * eased * targetX;
-            cursorPosition.y = remaining * remaining * start.y + 2 * remaining * eased * control.y + eased * eased * targetY;
-            renderCursor();
+            const nextX = remaining * remaining * start.x + 2 * remaining * eased * control.x + eased * eased * targetX;
+            const nextY = remaining * remaining * start.y + 2 * remaining * eased * control.y + eased * eased * targetY;
+            if (Math.hypot(nextX - agentPosition.x, nextY - agentPosition.y) > 0.5) {
+              triangleAngle = (Math.atan2(nextY - agentPosition.y, nextX - agentPosition.x) * 180) / Math.PI;
+            }
+            agentPosition.x = nextX;
+            agentPosition.y = nextY;
+            render();
             if (progress < 1) requestAnimationFrame(flightFrame);
             else resolve();
           }
           requestAnimationFrame(flightFrame);
         });
       },
-      /** Lets the cursor go back to trailing the user's pointer. */
-      releaseCursor(pointerX, pointerY) {
-        cursorIsBusy = false;
+      /** Lets the triangle go back to trailing the user's pointer. */
+      release(pointerX, pointerY) {
+        agentIsBusy = false;
+        labelElement.hidden = true;
         if (pointerX !== undefined) this.followPointer(pointerX, pointerY);
       },
       pulseClick() {
-        cursorElement.classList.remove("clicking");
-        void cursorElement.offsetWidth; // restart the animation
-        cursorElement.classList.add("clicking");
+        agentElement.classList.remove("clicking");
+        void agentElement.offsetWidth; // restart the animation
+        agentElement.classList.add("clicking");
       },
     };
   }
@@ -701,16 +754,17 @@
     let lastPointerPosition = null;
     let cursorReleaseTimeoutId = null;
     let currentToolBatch = null; // { toolUses, toolIndex, completedToolResults } while tools run
+    let progressSteps = []; // what the bubble has narrated for the current task, kept for resuming
+    let lastActivityAt = Date.now();
     const recentPageErrors = [];
     const pageEventListeners = [];
 
     const agentInterface = createAgentInterface({
       color: options.color,
-      label: options.label,
-      onSubmit: (request, modeKey) => runTask(request, modeKey),
-      onStop: () => stopTask("Stopped."),
-      onClose: () => close(),
+      onSubmit: (request) => runTask(request),
+      onDismiss: () => close(),
       onEndGuide: () => endGuide(),
+      onAnswerClick: () => open(),
     });
 
     function listen(eventTarget, eventType, listener, listenerOptions) {
@@ -738,15 +792,16 @@
         hostElementToIgnore: agentInterface.hostElement,
         recentPageErrors,
         siteContext: options.siteContext,
+        pointerPosition: lastPointerPosition,
       });
       currentElementsById = elementsById;
       return snapshotText;
     }
 
-    // ---------- card and cursor ----------
+    // ---------- bubble and cursor ----------
 
     function cursorShouldBeVisible() {
-      return options.showCursor === "always" || agentInterface.isCardOpen() || Boolean(activePlan) || Boolean(currentAbortController);
+      return options.showCursor === "always" || agentInterface.isBubbleVisible() || Boolean(activePlan) || Boolean(currentAbortController);
     }
 
     function updateCursorVisibility() {
@@ -754,26 +809,33 @@
       else if (!cursorShouldBeVisible()) agentInterface.hideCursor();
     }
 
-    function open(anchor) {
-      const anchorPoint = anchor ?? lastPointerPosition ?? { x: innerWidth / 2, y: innerHeight / 3 };
-      agentInterface.openCard(anchorPoint.x, anchorPoint.y);
+    function hasRecentConversation() {
+      return conversationMessages.length > 0 && Date.now() - lastActivityAt < CONVERSATION_IDLE_RESET_MS;
     }
 
-    /** Hides the card. A running guide keeps going from the cursor; anything else is reset. */
+    /** Opens the speech bubble as a text box at the triangle, ready to type. */
+    function open() {
+      if (currentAbortController) return; // busy: the bubble is narrating
+      if (!hasRecentConversation() && !activePlan) conversationMessages = [];
+      const isFollowUp = conversationMessages.length > 0;
+      agentInterface.showInput(isFollowUp ? "Reply, or ask something new" : options.placeholder, "return to send · esc to close");
+    }
+
+    /** Esc / hotkey: stops a running task, or closes the bubble. A running guide keeps going from the cursor. */
     function close() {
-      agentInterface.closeCard();
-      if (!activePlan) {
-        stopTask(null);
-        conversationMessages = [];
-        agentInterface.clearOutput();
-        persistence.clear();
+      if (currentAbortController) {
+        stopTask();
+        agentInterface.showAnswer("Stopped.", ANSWER_MIN_LINGER_MS);
+        return;
       }
+      agentInterface.hideBubble();
+      if (!activePlan) persistence.clear();
       updateCursorVisibility();
     }
 
-    function toggle(anchor) {
-      if (agentInterface.isCardOpen()) close();
-      else open(anchor);
+    function toggle() {
+      if (agentInterface.isTyping() || currentAbortController) close();
+      else open();
     }
 
     function endGuide() {
@@ -781,24 +843,31 @@
       clearTimeout(guideCheckInTimeoutId);
       pendingGuideCheckIn = null;
       agentInterface.renderPlan(null);
-      stopTask(null);
+      stopTask();
       conversationMessages = [];
-      agentInterface.clearOutput();
+      agentInterface.hideBubble();
       persistence.clear();
       updateCursorVisibility();
+    }
+
+    function narrate(statusText) {
+      progressSteps.push(statusText);
+      agentInterface.showStatus(statusText);
+    }
+
+    function answer(answerText) {
+      const wordCount = answerText.split(/\s+/).length;
+      agentInterface.showAnswer(answerText, Math.max(ANSWER_MIN_LINGER_MS, wordCount * ANSWER_LINGER_PER_WORD_MS));
     }
 
     // ---------- conversation bookkeeping ----------
 
     /** Ends a running task, leaving the conversation valid for a follow-up. */
-    function stopTask(message) {
+    function stopTask() {
       if (!currentAbortController) return;
       currentAbortController.abort();
       currentAbortController = null;
       closeDanglingToolUses("Cancelled by the user.");
-      agentInterface.finishSteps();
-      agentInterface.setWorking(false);
-      if (message) agentInterface.setError(message);
       if (!activePlan) persistence.clear();
     }
 
@@ -838,10 +907,7 @@
         conversationMessages,
         activePlan,
         guideCheckInCount,
-        mode: agentInterface.getSelectedMode(),
-        cardOpen: agentInterface.isCardOpen(),
-        cardAnchor: agentInterface.getCardAnchor(),
-        steps: agentInterface.getSteps(),
+        steps: progressSteps,
         stepCount: currentStepCount,
         ...extraState,
       };
@@ -873,9 +939,9 @@
         await wait(450);
       }
       const elementRect = element.getBoundingClientRect();
-      agentInterface.setCursorLabel(null);
-      await agentInterface.flyCursorTo(elementRect.left + Math.min(elementRect.width / 2, 40), elementRect.top + elementRect.height / 2);
-      if (label) agentInterface.setCursorLabel(label);
+      agentInterface.setPointLabel(null);
+      await agentInterface.flyTo(elementRect.left + Math.min(elementRect.width / 2, 40), elementRect.top + elementRect.height / 2);
+      if (label) agentInterface.setPointLabel(label);
     }
 
     async function runTool(toolUse) {
@@ -1000,12 +1066,14 @@
     }
 
     /** Runs one batch of tool uses and returns their tool_result blocks. */
-    async function runToolBatch(toolUses, abortSignal) {
+    async function runToolBatch(toolUses, abortSignal, agentNarratedThisStep) {
       const toolResults = [];
       for (let toolIndex = 0; toolIndex < toolUses.length; toolIndex++) {
         const toolUse = toolUses[toolIndex];
         if (abortSignal.aborted) return toolResults;
-        agentInterface.addStep(describeToolUse(toolUse, currentElementsById));
+        // The agent's own words read better than "Clicking …", so they stay up while its tools run.
+        if (agentNarratedThisStep) progressSteps.push(describeToolUse(toolUse, currentElementsById));
+        else narrate(describeToolUse(toolUse, currentElementsById));
         currentToolBatch = { toolUses, toolIndex, completedToolResults: [...toolResults] };
         let toolOutcome;
         try {
@@ -1043,7 +1111,7 @@
           if (agentStep.stop_reason === "refusal") {
             // A refused turn can't be continued, so the next request starts fresh.
             conversationMessages = [];
-            agentInterface.setAnswer("Sorry, I can't help with that one.");
+            answer("Sorry, I can't help with that one.");
             return;
           }
 
@@ -1054,25 +1122,26 @@
             .trim();
           const toolUses = agentStep.content.filter((contentBlock) => contentBlock.type === "tool_use");
           if (toolUses.length === 0) {
-            agentInterface.setAnswer(replyText || "Done.");
+            answer(replyText || "Done.");
             return;
           }
+          // Text the agent writes alongside tool calls is narration ("checking the dates first").
+          if (replyText) narrate(replyText);
 
-          const toolResults = await runToolBatch(toolUses, abortSignal);
+          const toolResults = await runToolBatch(toolUses, abortSignal, Boolean(replyText));
           if (abortSignal.aborted) return;
           conversationMessages.push({ role: "user", content: toolResults });
         }
         closeDanglingToolUses("Stopped: step limit reached.");
-        agentInterface.setError(`Stopped after ${options.maxSteps} steps. Try a more specific request.`);
+        agentInterface.showError(`I stopped after ${options.maxSteps} steps. Try a more specific request.`);
       } catch (error) {
         if (abortSignal.aborted) return;
         closeDanglingToolUses("The request failed.");
-        agentInterface.setError(String(error?.message ?? error));
+        agentInterface.showError(String(error?.message ?? error));
       } finally {
         if (currentAbortController === abortController) {
           currentAbortController = null;
-          agentInterface.finishSteps();
-          agentInterface.setWorking(false);
+          lastActivityAt = Date.now();
           if (activePlan) {
             // Keep the guide alive across page loads and run any check-in that queued up meanwhile.
             persistence.save(buildSavedState());
@@ -1083,8 +1152,7 @@
             }
           }
           cursorReleaseTimeoutId = setTimeout(() => {
-            agentInterface.releaseCursor(lastPointerPosition?.x, lastPointerPosition?.y);
-            agentInterface.setCursorLabel(null);
+            agentInterface.release(lastPointerPosition?.x, lastPointerPosition?.y);
             updateCursorVisibility();
           }, CURSOR_HOLD_AFTER_TASK_MS);
         }
@@ -1092,22 +1160,23 @@
     }
 
     function beginWorking() {
-      stopTask(null);
+      stopTask();
       clearTimeout(cursorReleaseTimeoutId);
       const abortController = new AbortController();
       currentAbortController = abortController;
-      agentInterface.setWorking(true);
+      lastActivityAt = Date.now();
+      updateCursorVisibility();
       return abortController;
     }
 
     async function runTask(request, modeKey) {
-      if (!agentInterface.isCardOpen()) open();
+      if (!hasRecentConversation() && !activePlan) conversationMessages = [];
       const abortController = beginWorking();
-      agentInterface.clearOutput();
       currentStepCount = 0;
-      agentInterface.addStep("Reading the page");
+      progressSteps = [];
+      narrate("Looking at the page");
       const snapshotText = refreshSnapshot();
-      const modeLine = modeKey ? `[Mode: ${MODES[modeKey].label}]\n` : "";
+      const modeLine = modeKey && MODE_LABELS[modeKey] ? `[Mode: ${MODE_LABELS[modeKey]}]\n` : "";
       conversationMessages.push({
         role: "user",
         content: [{ type: "text", text: `${modeLine}${request}\n\n<page_snapshot>\n${snapshotText}\n</page_snapshot>` }],
@@ -1132,9 +1201,9 @@
       guideCheckInCount++;
       compactGuideConversationIfLong();
       const abortController = beginWorking();
-      agentInterface.clearOutput();
       currentStepCount = 0;
-      agentInterface.addStep("Checking your progress");
+      progressSteps = [];
+      narrate("Checking your progress");
       const snapshotText = refreshSnapshot();
       conversationMessages.push({
         role: "user",
@@ -1153,18 +1222,16 @@
       activePlan = savedState.activePlan ?? null;
       guideCheckInCount = savedState.guideCheckInCount ?? 0;
       currentStepCount = savedState.stepCount ?? 0;
+      progressSteps = savedState.steps ?? [];
+      lastActivityAt = Date.now();
       agentInterface.renderPlan(activePlan);
-      if (savedState.mode) agentInterface.setSelectedMode(savedState.mode);
-      if (savedState.cardOpen || savedState.pendingToolUses?.length) {
-        agentInterface.openCard(savedState.cardAnchor?.x ?? innerWidth / 2, savedState.cardAnchor?.y ?? innerHeight / 3);
-      }
       updateCursorVisibility();
     }
 
     /** Picks up a tool batch that was interrupted when one of its actions loaded this page. */
     async function resumeToolBatch(savedState) {
-      for (const stepText of savedState.steps ?? []) agentInterface.addStep(stepText);
       const abortController = beginWorking();
+      narrate(progressSteps.at(-1) ?? "Picking up where I left off");
       const [interruptedToolUse, ...skippedToolUses] = savedState.pendingToolUses;
       conversationMessages.push({
         role: "user",
@@ -1193,8 +1260,9 @@
           await resumeToolBatch(savedState);
         } else if (conversationMessages.at(-1)?.role === "user") {
           // A request was in flight when the page unloaded; ask it again here.
-          for (const stepText of savedState.steps ?? []) agentInterface.addStep(stepText);
-          await continueAgentLoop(beginWorking());
+          const abortController = beginWorking();
+          narrate("Picking up where I left off");
+          await continueAgentLoop(abortController);
         }
       } else if (savedState.activePlan && savedAgeMs < GUIDE_RESUME_MAX_AGE_MS) {
         await restoreSavedState(savedState);
@@ -1252,7 +1320,7 @@
     });
 
     if (options.hotkey) {
-      // ctrl + option: pressing the second of the two keys toggles the card.
+      // ctrl + option: pressing the second of the two keys opens or closes the bubble.
       let chordAlreadyFired = false;
       listen(window, "keydown", (keyboardEvent) => {
         const isChordKey = keyboardEvent.key === "Control" || keyboardEvent.key === "Alt";
@@ -1265,6 +1333,10 @@
         if (!keyboardEvent.ctrlKey || !keyboardEvent.altKey) chordAlreadyFired = false;
       }, true);
     }
+    // Esc stops a running task (or closes an answer) even when focus is on the page.
+    listen(window, "keydown", (keyboardEvent) => {
+      if (keyboardEvent.key === "Escape" && (currentAbortController || agentInterface.isBubbleVisible())) close();
+    });
 
     resumeFromSavedState();
 
@@ -1272,10 +1344,9 @@
       open,
       close,
       toggle,
-      /** Opens the card and runs a request right away; mode is "explain", "troubleshoot", "pitch", "guide" or omitted. */
+      /** Runs a request right away. Mode is optional ("do", "explain", "troubleshoot", "pitch", "guide"); the agent picks one otherwise. */
       ask(request, modeKey) {
-        if (modeKey) agentInterface.setSelectedMode(modeKey);
-        return runTask(request, modeKey ?? agentInterface.getSelectedMode());
+        return runTask(request, modeKey);
       },
       registerAction(siteAction) {
         siteActions.set(siteAction.name, siteAction);
@@ -1299,9 +1370,9 @@
       sharedAgentInstance = createCursorAgent(options);
       return sharedAgentInstance;
     },
-    open: (anchor) => sharedAgentInstance?.open(anchor),
+    open: () => sharedAgentInstance?.open(),
     close: () => sharedAgentInstance?.close(),
-    toggle: (anchor) => sharedAgentInstance?.toggle(anchor),
+    toggle: () => sharedAgentInstance?.toggle(),
     ask: (request, modeKey) => sharedAgentInstance?.ask(request, modeKey),
     registerAction: (siteAction) => sharedAgentInstance?.registerAction(siteAction),
     setSiteContext: (siteContext) => sharedAgentInstance?.setSiteContext(siteContext),

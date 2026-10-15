@@ -12,7 +12,6 @@
   const { showCursorAlways = true } = await chrome.storage.local.get("showCursorAlways");
 
   CursorAgent.init({
-    label: location.hostname || "this page",
     showCursor: showCursorAlways ? "always" : "active",
     transport: {
       requestAgentStep(requestBody, abortSignal) {

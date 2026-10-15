@@ -1,20 +1,22 @@
 # lat.ai: Cursor Agent
 
-A second cursor, like [Clicky](https://github.com/farzaa/clicky)'s, that trails your own on any web page and has an AI agent inside. Press **ctrl + option** (ctrl + alt on Windows/Linux) and a small card pops out of it. Ask anything. The agent reads the page you're on and can:
+A second cursor, a small green triangle like [Clicky](https://github.com/farzaa/clicky)'s, that trails your own on any web page, with an AI agent inside. Press **ctrl + option** (ctrl + alt on Windows/Linux) and a speech bubble opens from it. Type what you want and press return. The triangle flies around the page doing it, narrating in the bubble, and answers there. Press **esc** to stop or close; click an answer to reply.
 
-| Mode | What it does |
+It works out where you are before it acts: the site, what kind of page it is, breadcrumbs, open dialogs, what's on screen, prices, which part of the page each control is in, and what your own pointer is resting on. So "what is this?" or "how much is that?" just work. It also picks the kind of help itself:
+
+| It can | For example |
 |---|---|
-| **Do** (default) | Makes things happen: clicks, types, picks options, scrolls, navigates across pages, and calls the site's own actions until the job is done. |
-| **Explain** | Walks you through the page, flying the cursor to each part as it explains it. |
-| **Troubleshoot** | Reads on-screen error messages, invalid fields, broken images and script errors, says what's wrong in plain words, and points at the fix. |
-| **Pitch** | Acts as the product's guide for a visitor, using context the site owner provides. It answers questions honestly, points at pricing and proof, and ends on the next step, like sign-up. |
-| **Guide me** | Keeps you on track: makes a short step plan, shows progress on the cursor ("2/5 · Add your work email"), points at what to do next, and checks in by itself every time you click, even with the card closed. It follows you across pages. |
+| **Do things** | "find the latest blog post": it clicks, types, chooses options, navigates across pages and calls the site's own actions until it's done. |
+| **Explain** | "what am I looking at?": the triangle walks you through the page, pointing at each part. |
+| **Troubleshoot** | "why won't this submit?": it reads on-screen errors, invalid fields, broken images and script errors, and points at the fix. |
+| **Pitch** | "why should my team pick this?": it's the product's honest guide, using context the site owner provides, and ends on the next step. |
+| **Guide you** | "help me create an account": a step plan with progress on the cursor ("2/5 · Add your work email"). It points at each step and checks in by itself every time you click, across pages. |
 
-![The Cursor Agent card popping out of the cursor](docs/cursor-agent-card.png)
+![Asking: the bubble opens from the green triangle](docs/ask.png)
 
-![Guide me: the plan in the card and progress on the cursor](docs/cursor-agent-guide.png)
+![Working: the triangle flies to what it's looking at and narrates](docs/pointing.png)
 
-![Guide me check-in with the card closed: progress pill and answer bubble on the cursor](docs/cursor-agent-guide-checkin.png)
+![The answer, in the same bubble](docs/answer.png)
 
 ## Two ways to use it
 
@@ -41,11 +43,11 @@ A second cursor, like [Clicky](https://github.com/farzaa/clicky)'s, that trails 
 </script>
 ```
 
-Other options: `color`, `label`, `showCursor` (`"always"` or `"active"`), `hotkey`, `maxSteps`. From code you can call `CursorAgent.open()`, `CursorAgent.ask("…", "guide")`, `CursorAgent.registerAction({...})` and `CursorAgent.setSiteContext("…")`.
+Other options: `color` (the triangle and bubble), `placeholder`, `showCursor` (`"always"` or `"active"`), `hotkey`, `maxSteps`. From code you can call `CursorAgent.open()`, `CursorAgent.ask("…")` (optionally forcing a mode: `"do"`, `"explain"`, `"troubleshoot"`, `"pitch"` or `"guide"`), `CursorAgent.registerAction({...})` and `CursorAgent.setSiteContext("…")`.
 
 ## How it works
 
-1. The SDK numbers the page's visible links, buttons, fields and headings, and adds the URL, a text excerpt, error messages and any site context. This is a text snapshot; no screenshots are taken.
+1. The SDK writes a text snapshot of the page: where the user is (site, page kind, breadcrumbs, dialogs, prices, what's under their pointer), then the visible links, buttons, fields and headings numbered and tagged by region, a text excerpt, error messages and any site context. No screenshots are taken.
 2. Your request and the snapshot go to the Worker. The Worker calls Claude with the page tools (`point`, `click`, `type`, `select_option`, `scroll`, `navigate`, `read_page`, `set_plan`, `complete_step`) plus the site's own actions.
 3. The SDK runs each tool on the page, animating the cursor to each element first, and sends the results back. This repeats until Claude answers in the card.
 4. If an action loads a new page, the SDK saves the task as the page unloads and carries on when the next page opens.
@@ -80,9 +82,9 @@ npx wrangler deploy
 
 `deploy` prints an address such as `https://cursor-agent.yourname.workers.dev`. Open it to try the demo site (Acme Cloud, a made-up company with a blog, pricing and a sign-up form). Press **ctrl + option** and try:
 - "find the latest blog post"
-- **Pitch**: "why should my team pick this?"
-- On the sign-up page, click **Create account** first, then **Troubleshoot**: "why won't this submit?"
-- **Guide me**: "help me create an account"
+- "why should my team pick this?"
+- On the sign-up page, click **Create account** first, then ask "why won't this submit?"
+- "help me create an account"
 
 To embed it on another site, add that site's origin to `ALLOWED_ORIGINS` in `worker/wrangler.toml` and redeploy.
 
