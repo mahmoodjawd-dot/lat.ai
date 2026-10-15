@@ -1,6 +1,8 @@
 # lat.ai: Cursor Agent
 
-A second cursor, a small green triangle like [Clicky](https://github.com/farzaa/clicky)'s, that trails your own on any web page, with an AI agent inside. Press **ctrl + option** (ctrl + alt on Windows/Linux) and a speech bubble opens from it. Type what you want and press return. The triangle flies around the page doing it, narrating in the bubble, and answers there. Press **esc** to stop or close; click an answer to reply.
+A second cursor, a small yellow arrowhead facing the same way as your pointer (like [Clicky](https://github.com/farzaa/clicky)'s companion), that trails your own on any web page, with an AI agent inside. Nothing else shows until you call it: press **ctrl + option** (ctrl + alt on Windows/Linux) and a speech bubble opens from it. Type what you want and press return. The arrowhead glides around the page doing it, narrating in the bubble, answers there, then the bubble fades away. Press **esc** to stop or close; click an answer to reply.
+
+Every request also captures **what's on screen** (with the agent hidden), tags each clickable element with its number, and sends that picture to Claude with the page text. So it sees layout, images and charts as well as the structure, and can point at any spot in the picture.
 
 It works out where you are before it acts: the site, what kind of page it is, breadcrumbs, open dialogs, what's on screen, prices, which part of the page each control is in, and what your own pointer is resting on. So "what is this?" or "how much is that?" just work. It also picks the kind of help itself:
 
@@ -12,9 +14,9 @@ It works out where you are before it acts: the site, what kind of page it is, br
 | **Pitch** | "why should my team pick this?": it's the product's honest guide, using context the site owner provides, and ends on the next step. |
 | **Guide you** | "help me create an account": a step plan with progress on the cursor ("2/5 · Add your work email"). It points at each step and checks in by itself every time you click, across pages. |
 
-![Asking: the bubble opens from the green triangle](docs/ask.png)
+![Asking: the bubble opens from the yellow arrowhead](docs/ask.png)
 
-![Working: the triangle flies to what it's looking at and narrates](docs/pointing.png)
+![Working: the arrowhead glides to what it's looking at and narrates](docs/pointing.png)
 
 ![The answer, in the same bubble](docs/answer.png)
 
@@ -43,14 +45,15 @@ It works out where you are before it acts: the site, what kind of page it is, br
 </script>
 ```
 
-Other options: `color` (the triangle and bubble), `placeholder`, `showCursor` (`"always"` or `"active"`), `hotkey`, `maxSteps`. From code you can call `CursorAgent.open()`, `CursorAgent.ask("…")` (optionally forcing a mode: `"do"`, `"explain"`, `"troubleshoot"`, `"pitch"` or `"guide"`), `CursorAgent.registerAction({...})` and `CursorAgent.setSiteContext("…")`.
+Other options: `color` (the arrowhead and bubble; the text color adapts), `placeholder`, `screenCapture` (`"tab"` asks the visitor once per page to share the tab so the agent gets screenshots; default `"off"`), `showCursor` (`"always"` or `"active"`), `hotkey`, `maxSteps`. From code you can call `CursorAgent.open()`, `CursorAgent.ask("…")` (optionally forcing a mode: `"do"`, `"explain"`, `"troubleshoot"`, `"pitch"` or `"guide"`), `CursorAgent.registerAction({...})` and `CursorAgent.setSiteContext("…")`.
 
 ## How it works
 
-1. The SDK writes a text snapshot of the page: where the user is (site, page kind, breadcrumbs, dialogs, prices, what's under their pointer), then the visible links, buttons, fields and headings numbered and tagged by region, a text excerpt, error messages and any site context. No screenshots are taken.
-2. Your request and the snapshot go to the Worker. The Worker calls Claude with the page tools (`point`, `click`, `type`, `select_option`, `scroll`, `navigate`, `read_page`, `set_plan`, `complete_step`) plus the site's own actions.
-3. The SDK runs each tool on the page, animating the cursor to each element first, and sends the results back. This repeats until Claude answers in the speech bubble.
-4. If an action loads a new page, the SDK saves the task as the page unloads and carries on when the next page opens.
+1. The SDK writes a text snapshot of the page: where the user is (site, page kind, breadcrumbs, dialogs, prices, what's under their pointer), then the visible links, buttons, fields and headings numbered and tagged by region, a text excerpt, error messages and any site context.
+2. It also takes a screenshot of the visible page, hiding itself for that frame, and draws each element's number on it. The extension captures the tab silently; an embedding site uses `screenCapture: "tab"`, which asks once to share the tab. If there's no screenshot, the agent works from the text alone.
+3. Your request, the snapshot and the screenshot go to the Worker. The Worker calls Claude with the page tools (`point`, `point_at_spot`, `click`, `type`, `select_option`, `scroll`, `navigate`, `read_page`, `set_plan`, `complete_step`) plus the site's own actions. `read_page` returns a fresh snapshot and screenshot.
+4. The SDK runs each tool on the page, gliding the arrowhead to each element first, and sends the results back. This repeats until Claude answers in the speech bubble.
+5. If an action loads a new page, the SDK saves the task as the page unloads and carries on when the next page opens.
 
 **Safety rails:**
 - Password, one-time-code and payment-card fields are never shown to the agent or typed into.
@@ -124,7 +127,7 @@ Run `npm --prefix worker run tail` to watch the Worker's logs live.
 
 ```
 web/
-  cursor-agent.js   the SDK: triangle cursor, speech bubble, page snapshot, tools, agent loop (no dependencies)
+  cursor-agent.js   the SDK: arrowhead cursor, speech bubble, page snapshot, screenshots, tools, agent loop (no dependencies)
   index.html, blog.html, blog/, signup.html, demo.css, demo.js   the Acme Cloud demo site
 worker/             Cloudflare Worker: serves web/ and runs agent steps (POST /api/agent)
   src/index.ts      route, access control, site-action validation, Claude call

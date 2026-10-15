@@ -38,7 +38,8 @@ interface AgentRequestBody {
   siteActions?: SiteAction[];
 }
 
-const MAX_REQUEST_BYTES = 4_000_000;
+// Screenshots make conversations large; each one is roughly 100-250 KB.
+const MAX_REQUEST_BYTES = 24_000_000;
 const MAX_MESSAGES = 80;
 const MAX_SITE_ACTIONS = 20;
 const MAX_SITE_ACTION_SCHEMA_CHARACTERS = 4000;

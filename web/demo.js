@@ -11,6 +11,7 @@ function showDemoToast(message) {
 
 CursorAgent.init({
   endpoint: "", // same origin: the Worker serves this demo
+  screenCapture: "tab", // asks once to share this tab so the agent can see the page
   siteContext: [
     "Acme Cloud is a hosting platform for web apps and APIs. Push code from GitHub and it builds and deploys automatically, with preview links for every pull request.",
     "Plans: Free ($0, 1 project, community support). Pro ($20 per month, unlimited projects, custom domains, email support). Team ($50 per month per 5 seats, everything in Pro plus SSO, audit logs and a 99.9% uptime SLA).",

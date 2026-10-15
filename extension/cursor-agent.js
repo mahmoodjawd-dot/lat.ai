@@ -44,8 +44,12 @@
     actions: [], // site actions: { name, description, parameters (JSON Schema), run(params) }
     hotkey: true, // ctrl + option toggles the card
     showCursor: "always", // "always": trail the pointer everywhere; "active": only while the agent is busy or a guide runs
-    color: "#34a56f", // the triangle and speech bubble
+    color: "#ffd60a", // the arrowhead and speech bubble; text color adapts to it
     placeholder: "Ask me anything about this page",
+    // Screenshots give the agent eyes. "tab" asks the visitor once per page to share this tab;
+    // the extension passes captureVisibleTab instead, which needs no prompt.
+    screenCapture: "off",
+    captureVisibleTab: null, // async () => a data: URL of the visible tab
     maxSteps: 20,
     transport: null, // { requestAgentStep(body, signal) } to route requests elsewhere (the extension uses this)
     persistence: null, // { load(), save(state), clear() } to carry tasks and guides across page loads
@@ -67,6 +71,9 @@
   const GUIDE_CHECK_IN_DELAY_MS = 1200;
   const MAX_GUIDE_CHECK_INS = 40;
   const COMPACT_CONVERSATION_AFTER_MESSAGES = 40;
+  const MAX_SCREENSHOT_WIDTH = 1280;
+  const SCREENSHOT_JPEG_QUALITY = 0.62;
+  const MAX_SCREENSHOT_TAGS = 120;
   const ANSWER_MIN_LINGER_MS = 6000;
   const ANSWER_LINGER_PER_WORD_MS = 350;
   const CONVERSATION_IDLE_RESET_MS = 5 * 60 * 1000;
@@ -400,69 +407,89 @@
   }
 
   // ===================================================================
-  // UI: the agent's triangle cursor and its speech bubble (in a shadow root)
+  // UI: the agent's arrowhead and its speech bubble (in a shadow root)
   // ===================================================================
 
-  // The triangle's tip sits at the agent element's origin, so translating the
-  // element to a point puts the tip exactly there, and rotation pivots on it.
-  const IDLE_TRIANGLE_ANGLE_DEGREES = -18;
-  const TRAIL_OFFSET_X = 30;
-  const TRAIL_OFFSET_Y = 30;
+  // The arrowhead faces up-left like the system pointer, and its tip sits at
+  // the agent element's origin, so translating the element to a point puts
+  // the tip exactly on it.
+  const TRAIL_OFFSET_X = 20;
+  const TRAIL_OFFSET_Y = 22;
+
+  /** Dark or light text, whichever reads better on the agent's color. */
+  function pickInkColor(backgroundColor) {
+    const probeElement = document.createElement("div");
+    probeElement.style.color = backgroundColor;
+    document.documentElement.appendChild(probeElement);
+    const [red, green, blue] = getComputedStyle(probeElement).color.match(/\d+/g).map(Number);
+    probeElement.remove();
+    const toLinear = (channel) => ((channel /= 255) <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    const luminance = 0.2126 * toLinear(red) + 0.7152 * toLinear(green) + 0.0722 * toLinear(blue);
+    return luminance > 0.4 ? "#1c1917" : "#ffffff";
+  }
 
   const UI_STYLES = `
     :host { all: initial; }
     .layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483647;
-      font: 600 15px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
-      -webkit-font-smoothing: antialiased; }
+      font: 600 14.5px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+      letter-spacing: -0.005em; -webkit-font-smoothing: antialiased; }
+    .layer.capturing { visibility: hidden; }
     [hidden] { display: none !important; }
 
-    .agent { position: absolute; left: 0; top: 0; will-change: transform; opacity: 0; transition: opacity 220ms ease; }
+    .agent { position: absolute; left: 0; top: 0; will-change: transform; opacity: 0; transition: opacity 240ms ease; }
     .agent.visible { opacity: 1; }
-    .triangle { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; will-change: transform; }
-    .triangle svg { position: absolute; left: -19px; top: -9px; overflow: visible;
-      filter: drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 7px color-mix(in srgb, var(--agent-color) 55%, transparent)); }
-    .ring { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; border-radius: 50%;
+    .arrowhead { position: absolute; left: -1px; top: -1px; overflow: visible; transition: transform 160ms ease;
+      filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)) drop-shadow(0 3px 8px rgba(0,0,0,.18)); }
+    .agent.flying .arrowhead { transform: scale(1.08); }
+    .agent.working .arrowhead { animation: breathe 1.6s ease-in-out infinite; }
+    @keyframes breathe { 50% { transform: scale(1.12); } }
+    .ring { position: absolute; left: -15px; top: -15px; width: 30px; height: 30px; border-radius: 50%;
       border: 2px solid var(--agent-color); opacity: 0; }
-    .agent.clicking .ring { animation: ring 650ms ease-out; }
-    @keyframes ring { from { transform: scale(.3); opacity: .9; } to { transform: scale(2); opacity: 0; } }
+    .agent.clicking .ring { animation: ring 600ms cubic-bezier(.2,.7,.3,1); }
+    @keyframes ring { from { transform: scale(.25); opacity: 1; } to { transform: scale(1.9); opacity: 0; } }
 
-    .stack { position: absolute; left: -20px; top: 22px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-    .agent.flip-x .stack { left: auto; right: -6px; align-items: flex-end; }
-    .agent.flip-y .stack { top: auto; bottom: 22px; flex-direction: column-reverse; }
+    .stack { position: absolute; left: 12px; top: 26px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .agent.flip-x .stack { left: auto; right: -8px; align-items: flex-end; }
+    .agent.flip-y .stack { top: auto; bottom: 10px; flex-direction: column-reverse; }
 
-    .bubble { pointer-events: auto; box-sizing: border-box; width: max-content; min-width: 120px; max-width: min(380px, calc(100vw - 32px));
-      padding: 10px 14px; border-radius: 11px; color: #fff;
-      background: color-mix(in srgb, var(--agent-color) 90%, transparent);
-      box-shadow: 0 8px 24px rgba(0,0,0,.22), inset 0 0 0 1px rgba(255,255,255,.12);
-      -webkit-backdrop-filter: blur(10px) saturate(1.3); backdrop-filter: blur(10px) saturate(1.3);
-      transform-origin: top left; animation: pop 160ms ease-out; }
-    .agent.flip-x .bubble { transform-origin: top right; }
-    @keyframes pop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
-    .bubble.error { background: color-mix(in srgb, #c2410c 92%, transparent); }
+    .bubble { pointer-events: auto; box-sizing: border-box; width: max-content; min-width: 132px; max-width: min(360px, calc(100vw - 32px));
+      padding: 9px 13px 10px; border-radius: 4px 14px 14px 14px; color: var(--agent-ink);
+      background: var(--agent-color);
+      box-shadow: 0 1px 0 rgba(255,255,255,.35) inset, 0 0 0 0.5px rgba(0,0,0,.18), 0 10px 30px -6px rgba(0,0,0,.28), 0 3px 8px rgba(0,0,0,.10);
+      transform-origin: 0 0; animation: bubble-in 220ms cubic-bezier(.2,.9,.3,1.2); }
+    .agent.flip-x .bubble { border-radius: 14px 4px 14px 14px; transform-origin: 100% 0; }
+    .agent.flip-y .bubble { border-radius: 14px 14px 14px 4px; transform-origin: 0 100%; }
+    .bubble.leaving { animation: bubble-out 220ms ease forwards; }
+    @keyframes bubble-in { from { opacity: 0; transform: scale(.86) translateY(-3px); } to { opacity: 1; transform: none; } }
+    @keyframes bubble-out { to { opacity: 0; transform: scale(.94); } }
+    .bubble.error { background: #3b0d0c; color: #fff; }
     .bubble.answer { cursor: pointer; }
     .bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
-    .bubble.working .bubble-text::after { content: ""; display: inline-block; width: 1.2em; text-align: left;
-      animation: dots 1.2s steps(4, end) infinite; }
-    @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
-    .bubble-input { display: block; width: 300px; max-width: 100%; margin: 0; padding: 0; border: 0; outline: none; background: transparent;
-      color: #fff; font: inherit; caret-color: #fff; }
-    .bubble-input::placeholder { color: rgba(255,255,255,.72); }
-    .bubble-hint { margin-top: 6px; font-size: 11.5px; font-weight: 500; color: rgba(255,255,255,.72); }
+    .bubble.working .bubble-text { display: flex; align-items: center; gap: 8px; }
+    .bubble.working .bubble-text::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%;
+      background: currentColor; opacity: .55; animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .15; transform: scale(.7); } }
+    .bubble-input { display: block; width: 290px; max-width: 100%; margin: 0; padding: 0; border: 0; outline: none; background: transparent;
+      color: inherit; font: inherit; caret-color: currentColor; }
+    .bubble-input::placeholder { color: inherit; opacity: .5; }
+    .bubble-hint { margin-top: 5px; font-size: 11px; font-weight: 500; opacity: .55; letter-spacing: 0; }
 
-    .label { pointer-events: none; padding: 3px 9px; border-radius: 999px; background: #fff; color: color-mix(in srgb, var(--agent-color) 80%, #000);
-      font-size: 12px; font-weight: 700; box-shadow: 0 2px 8px rgba(0,0,0,.18); animation: pop 140ms ease-out; }
-
-    .plan-chip { pointer-events: auto; display: flex; align-items: center; gap: 8px; max-width: 320px; padding: 5px 6px 5px 11px; border-radius: 999px;
-      background: rgba(17, 24, 39, .88); color: #fff; font-size: 12.5px; font-weight: 600; box-shadow: 0 4px 14px rgba(0,0,0,.22);
-      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
-    .plan-count { flex: none; color: var(--agent-color); filter: brightness(1.35); }
+    .label, .plan-chip { pointer-events: none; color: #fff; background: rgba(24, 22, 20, .9);
+      box-shadow: 0 0 0 0.5px rgba(255,255,255,.08) inset, 0 4px 14px rgba(0,0,0,.25);
+      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+    .label { padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 650; animation: bubble-in 180ms ease-out; }
+    .label::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%;
+      background: var(--agent-color); transform: translateY(-1px); }
+    .plan-chip { pointer-events: auto; display: flex; align-items: center; gap: 8px; max-width: 320px; padding: 4px 5px 4px 10px;
+      border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+    .plan-count { flex: none; color: var(--agent-color); font-variant-numeric: tabular-nums; }
     .plan-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .plan-end { flex: none; width: 20px; height: 20px; border: 0; border-radius: 50%; background: rgba(255,255,255,.12); color: #fff;
+    .plan-end { flex: none; width: 20px; height: 20px; border: 0; border-radius: 50%; background: rgba(255,255,255,.1); color: #fff;
       font: 600 13px/1 system-ui, sans-serif; cursor: pointer; }
-    .plan-end:hover { background: rgba(255,255,255,.25); }
-    button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+    .plan-end:hover { background: rgba(255,255,255,.22); }
+    button:focus-visible { outline: 2px solid var(--agent-color); outline-offset: 2px; }
 
-    @media (prefers-reduced-motion: reduce) { .bubble, .label { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .bubble, .label, .agent.working .arrowhead { animation: none; } }
   `;
 
   function createAgentInterface({ color, onSubmit, onDismiss, onEndGuide, onAnswerClick }) {
@@ -473,11 +500,10 @@
       <div class="layer">
         <div class="agent">
           <div class="ring"></div>
-          <div class="triangle">
-            <svg width="22" height="18" viewBox="-19 -9 22 18" aria-hidden="true">
-              <path d="M1.5 0 L-17 -7.5 Q-18.6 -8.1 -18.2 -6.4 L-15.5 0 L-18.2 6.4 Q-18.6 8.1 -17 7.5 Z" fill="var(--agent-color)" stroke="rgba(255,255,255,.9)" stroke-width="1.2" stroke-linejoin="round"/>
-            </svg>
-          </div>
+          <svg class="arrowhead" width="22" height="22" viewBox="-1 -1 22 22" aria-hidden="true">
+            <path d="M0.6 0.6 L18.4 7.3 Q19.5 7.8 18.4 8.3 L10.3 10.3 L8.3 18.4 Q7.8 19.5 7.3 18.4 Z"
+              fill="var(--agent-color)" stroke="rgba(0,0,0,.55)" stroke-width="1" stroke-linejoin="round"/>
+          </svg>
           <div class="stack">
             <div class="label" hidden></div>
             <form class="bubble" hidden aria-live="polite">
@@ -495,7 +521,6 @@
     const select = (selector) => shadowRoot.querySelector(selector);
     const layerElement = select(".layer");
     const agentElement = select(".agent");
-    const triangleElement = select(".triangle");
     const labelElement = select(".label");
     const bubbleElement = select(".bubble");
     const bubbleTextElement = select(".bubble-text");
@@ -505,26 +530,37 @@
     const planCountElement = select(".plan-count");
     const planTextElement = select(".plan-text");
     layerElement.style.setProperty("--agent-color", color);
+    layerElement.style.setProperty("--agent-ink", pickInkColor(color));
     document.documentElement.appendChild(hostElement);
 
     const agentPosition = { x: innerWidth / 2, y: innerHeight / 2 };
-    let triangleAngle = IDLE_TRIANGLE_ANGLE_DEGREES;
     let agentIsBusy = false; // flying to or holding on an element instead of trailing the pointer
     let bubbleState = "hidden"; // hidden | input | working | answer | error
     let bubbleHideTimeoutId = null;
 
     function render() {
       agentElement.style.transform = `translate3d(${agentPosition.x}px, ${agentPosition.y}px, 0)`;
-      triangleElement.style.transform = `rotate(${triangleAngle}deg)`;
-      agentElement.classList.toggle("flip-x", agentPosition.x > innerWidth - 400);
-      agentElement.classList.toggle("flip-y", agentPosition.y > innerHeight - 190);
+      agentElement.classList.toggle("flip-x", agentPosition.x > innerWidth - 390);
+      agentElement.classList.toggle("flip-y", agentPosition.y > innerHeight - 170);
     }
     render();
 
     function setBubble(state, text, { placeholder, hint } = {}) {
       clearTimeout(bubbleHideTimeoutId);
+      const wasHidden = bubbleState === "hidden";
       bubbleState = state;
-      bubbleElement.hidden = state === "hidden";
+      agentElement.classList.toggle("working", state === "working");
+      if (state === "hidden") {
+        if (wasHidden) return;
+        // Let the bubble fade out before removing it.
+        bubbleElement.classList.add("leaving");
+        bubbleHideTimeoutId = setTimeout(() => {
+          bubbleElement.hidden = true;
+          bubbleElement.classList.remove("leaving");
+        }, 220);
+        return;
+      }
+      bubbleElement.hidden = false;
       bubbleElement.className = `bubble ${state}`;
       const isInput = state === "input";
       bubbleInputElement.hidden = !isInput;
@@ -539,7 +575,7 @@
         bubbleTextElement.textContent = text ?? "";
         bubbleTextElement.scrollTop = bubbleTextElement.scrollHeight;
       }
-      if (state !== "hidden") agentElement.classList.add("visible");
+      agentElement.classList.add("visible");
     }
 
     bubbleElement.addEventListener("submit", (submitEvent) => {
@@ -580,6 +616,10 @@
       hideBubble() {
         setBubble("hidden");
       },
+      /** Hides everything for one screenshot, so the agent isn't in its own picture. */
+      setHiddenForCapture(hiddenForCapture) {
+        layerElement.classList.toggle("capturing", hiddenForCapture);
+      },
       renderPlan(activePlan) {
         planChipElement.hidden = !activePlan;
         if (!activePlan) return;
@@ -602,42 +642,41 @@
         if (agentIsBusy || bubbleState === "input") return;
         agentPosition.x = x + TRAIL_OFFSET_X;
         agentPosition.y = y + TRAIL_OFFSET_Y;
-        triangleAngle += (IDLE_TRIANGLE_ANGLE_DEGREES - triangleAngle) * 0.25;
         render();
       },
       setPointLabel(labelText) {
         labelElement.textContent = labelText ?? "";
         labelElement.hidden = !labelText;
       },
-      /** Flies the triangle's tip to (x, y) along a curved arc, turning to face where it's going. */
+      /** Glides the arrowhead's tip to (x, y) along a gentle arc; resolves on arrival. */
       flyTo(targetX, targetY) {
         agentIsBusy = true;
-        agentElement.classList.add("visible");
+        agentElement.classList.add("visible", "flying");
         const start = { ...agentPosition };
         const flightDistance = Math.hypot(targetX - start.x, targetY - start.y);
-        const control = { x: (start.x + targetX) / 2, y: Math.min(start.y, targetY) - Math.min(180, flightDistance * 0.3) };
-        const durationMs = Math.max(380, Math.min(950, 320 + flightDistance * 0.45));
+        const control = { x: (start.x + targetX) / 2, y: Math.min(start.y, targetY) - Math.min(140, flightDistance * 0.25) };
+        const durationMs = Math.max(420, Math.min(1000, 360 + flightDistance * 0.45));
         const startTime = performance.now();
         return new Promise((resolve) => {
           function flightFrame(now) {
             const progress = Math.min((now - startTime) / durationMs, 1);
-            const eased = progress * progress * (3 - 2 * progress);
+            // Ease in and out with a soft landing.
+            const eased = progress < 0.5 ? 4 * progress ** 3 : 1 - (-2 * progress + 2) ** 3 / 2;
             const remaining = 1 - eased;
-            const nextX = remaining * remaining * start.x + 2 * remaining * eased * control.x + eased * eased * targetX;
-            const nextY = remaining * remaining * start.y + 2 * remaining * eased * control.y + eased * eased * targetY;
-            if (Math.hypot(nextX - agentPosition.x, nextY - agentPosition.y) > 0.5) {
-              triangleAngle = (Math.atan2(nextY - agentPosition.y, nextX - agentPosition.x) * 180) / Math.PI;
-            }
-            agentPosition.x = nextX;
-            agentPosition.y = nextY;
+            agentPosition.x = remaining * remaining * start.x + 2 * remaining * eased * control.x + eased * eased * targetX;
+            agentPosition.y = remaining * remaining * start.y + 2 * remaining * eased * control.y + eased * eased * targetY;
             render();
-            if (progress < 1) requestAnimationFrame(flightFrame);
-            else resolve();
+            if (progress < 1) {
+              requestAnimationFrame(flightFrame);
+            } else {
+              agentElement.classList.remove("flying");
+              resolve();
+            }
           }
           requestAnimationFrame(flightFrame);
         });
       },
-      /** Lets the triangle go back to trailing the user's pointer. */
+      /** Lets the arrowhead go back to trailing the user's pointer. */
       release(pointerX, pointerY) {
         agentIsBusy = false;
         labelElement.hidden = true;
@@ -649,6 +688,43 @@
         agentElement.classList.add("clicking");
       },
     };
+  }
+
+  // ===================================================================
+  // Screenshots: the page as a picture, tagged with element ids
+  // ===================================================================
+
+  function loadImageFromDataUrl(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const imageElement = new Image();
+      imageElement.onload = () => resolve(imageElement);
+      imageElement.onerror = () => reject(new Error("Screenshot couldn't be decoded"));
+      imageElement.src = dataUrl;
+    });
+  }
+
+  /** Draws a small numbered tag on each on-screen element so the picture lines up with the snapshot's ids. */
+  function drawElementTags(drawingContext, elementsById, pageToImageScale) {
+    let tagCount = 0;
+    drawingContext.font = `700 ${Math.round(11 * Math.max(1, pageToImageScale))}px -apple-system, system-ui, sans-serif`;
+    drawingContext.textBaseline = "middle";
+    for (const [elementId, element] of elementsById) {
+      if (tagCount >= MAX_SCREENSHOT_TAGS || !element.isConnected || !isInViewport(element)) continue;
+      const elementRect = element.getBoundingClientRect();
+      const left = elementRect.left * pageToImageScale;
+      const top = elementRect.top * pageToImageScale;
+      drawingContext.lineWidth = 1.5;
+      drawingContext.strokeStyle = "rgba(255, 214, 10, 0.9)";
+      drawingContext.strokeRect(left, top, elementRect.width * pageToImageScale, elementRect.height * pageToImageScale);
+      const tagText = String(elementId);
+      const tagWidth = drawingContext.measureText(tagText).width + 8;
+      const tagHeight = 14 * Math.max(1, pageToImageScale);
+      drawingContext.fillStyle = "#ffd60a";
+      drawingContext.fillRect(left, Math.max(0, top - tagHeight), tagWidth, tagHeight);
+      drawingContext.fillStyle = "#000";
+      drawingContext.fillText(tagText, left + 4, Math.max(0, top - tagHeight) + tagHeight / 2);
+      tagCount++;
+    }
   }
 
   // ===================================================================
@@ -676,6 +752,7 @@
       case "select_option": return `Choosing “${collapseWhitespace(toolUse.input.option, 40)}”`;
       case "scroll": return `Scrolling ${toolUse.input.direction}`;
       case "navigate": return `Opening ${collapseWhitespace(toolUse.input.url, 50)}`;
+      case "point_at_spot": return `Pointing at ${toolUse.input.label || "that"}`;
       case "set_plan": return "Making a plan";
       case "complete_step": return `Step ${toolUse.input.step_number} done`;
       default: return `Running ${toolUse.name.replace(/_/g, " ")}`;
@@ -755,6 +832,10 @@
     let cursorReleaseTimeoutId = null;
     let currentToolBatch = null; // { toolUses, toolIndex, completedToolResults } while tools run
     let progressSteps = []; // what the bubble has narrated for the current task, kept for resuming
+    let tabShareStream = null; // screenCapture "tab": the shared tab, kept for the life of the page
+    let tabSharePromise = null;
+    let tabShareDecisionAwaited = false; // only the first screenshot waits for the visitor to answer the share prompt
+    let lastScreenshotScale = null; // screenshot pixels per CSS pixel, for point_at_spot
     let lastActivityAt = Date.now();
     const recentPageErrors = [];
     const pageEventListeners = [];
@@ -930,6 +1011,105 @@
       persistence.save(buildSavedState({ taskWasRunning: Boolean(currentAbortController), ...unfinishedToolBatch }));
     }
 
+    // ---------- screenshots ----------
+
+    /**
+     * screenCapture "tab": browsers only allow asking to share a tab during a
+     * user gesture, so this runs synchronously from the submit. If the visitor
+     * declines, the agent carries on with the text snapshot alone.
+     */
+    function requestTabShareDuringUserGesture() {
+      if (options.captureVisibleTab || options.screenCapture !== "tab" || tabShareStream || tabSharePromise) return;
+      if (!navigator.mediaDevices?.getDisplayMedia) return;
+      tabSharePromise = navigator.mediaDevices
+        .getDisplayMedia({ video: { displaySurface: "browser", frameRate: 2 }, audio: false, preferCurrentTab: true, selfBrowserSurface: "include" })
+        .then((stream) => {
+          const videoTrack = stream.getVideoTracks()[0];
+          const sharedSurface = videoTrack.getSettings().displaySurface;
+          if (sharedSurface && sharedSurface !== "browser") {
+            // A whole screen or window wouldn't line up with the page; don't use it.
+            stream.getTracks().forEach((track) => track.stop());
+            return null;
+          }
+          tabShareStream = stream;
+          videoTrack.addEventListener("ended", () => {
+            tabShareStream = null;
+            tabSharePromise = null;
+          });
+          return stream;
+        })
+        .catch(() => null);
+    }
+
+    /** Resolves with the shared tab's stream, waiting once (while the agent stays visible) for the visitor's answer. */
+    async function getTabShareStream() {
+      if (tabShareStream || !tabSharePromise) return tabShareStream;
+      if (tabShareDecisionAwaited) return null; // still unanswered or declined: carry on without a picture
+      tabShareDecisionAwaited = true;
+      return Promise.race([tabSharePromise, wait(15000).then(() => null)]);
+    }
+
+    async function grabScreenImage(stream) {
+      if (options.captureVisibleTab) {
+        const dataUrl = await options.captureVisibleTab();
+        return dataUrl ? loadImageFromDataUrl(dataUrl) : null;
+      }
+      if (!stream) return null;
+      const videoElement = document.createElement("video");
+      videoElement.muted = true;
+      videoElement.srcObject = stream;
+      await videoElement.play();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      return videoElement;
+    }
+
+    /** Takes a screenshot of the visible page (without the agent in it) and tags the snapshot's elements on it. */
+    async function captureScreenshot() {
+      if (!options.captureVisibleTab && options.screenCapture !== "tab") return null;
+      const tabStream = options.captureVisibleTab ? null : await getTabShareStream();
+      if (!options.captureVisibleTab && !tabStream) return null;
+      let screenImage = null;
+      agentInterface.setHiddenForCapture(true);
+      try {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await wait(40);
+        screenImage = await Promise.race([grabScreenImage(tabStream), wait(4000).then(() => null)]);
+      } catch (error) {
+        console.warn("Cursor Agent: screenshot failed; continuing with the page text only.", error);
+      } finally {
+        agentInterface.setHiddenForCapture(false);
+      }
+      const sourceWidth = screenImage?.videoWidth || screenImage?.naturalWidth || screenImage?.width;
+      const sourceHeight = screenImage?.videoHeight || screenImage?.naturalHeight || screenImage?.height;
+      if (!sourceWidth || !sourceHeight) return null;
+
+      const downscale = Math.min(1, MAX_SCREENSHOT_WIDTH / sourceWidth);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(sourceWidth * downscale);
+      canvas.height = Math.round(sourceHeight * downscale);
+      const drawingContext = canvas.getContext("2d");
+      drawingContext.drawImage(screenImage, 0, 0, canvas.width, canvas.height);
+      if (screenImage instanceof HTMLVideoElement) screenImage.srcObject = null;
+      lastScreenshotScale = canvas.width / innerWidth;
+      drawElementTags(drawingContext, currentElementsById, lastScreenshotScale);
+      return {
+        base64: canvas.toDataURL("image/jpeg", SCREENSHOT_JPEG_QUALITY).split(",")[1],
+        width: canvas.width,
+        height: canvas.height,
+      };
+    }
+
+    function buildScreenshotBlocks(screenshot) {
+      if (!screenshot) return [];
+      return [
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: screenshot.base64 } },
+        {
+          type: "text",
+          text: `(Screenshot of what the user sees right now, ${screenshot.width}x${screenshot.height} pixels, with the agent hidden. Yellow tags show the element ids from the snapshot.)`,
+        },
+      ];
+    }
+
     // ---------- tools ----------
 
     async function moveCursorToElement(element, label) {
@@ -953,8 +1133,20 @@
       }
 
       switch (toolUse.name) {
-        case "read_page":
-          return { text: refreshSnapshot() };
+        case "read_page": {
+          const snapshotText = refreshSnapshot();
+          return { text: snapshotText, extraBlocks: buildScreenshotBlocks(await captureScreenshot()) };
+        }
+
+        case "point_at_spot": {
+          if (!lastScreenshotScale) return { text: "There's no screenshot to point into; use point with an element id.", isError: true };
+          clearTimeout(cursorReleaseTimeoutId);
+          agentInterface.setPointLabel(null);
+          await agentInterface.flyTo(toolInput.x / lastScreenshotScale, toolInput.y / lastScreenshotScale);
+          if (toolInput.label) agentInterface.setPointLabel(toolInput.label);
+          await wait(HOLD_AFTER_POINT_MS);
+          return { text: `Pointed at (${toolInput.x}, ${toolInput.y}) in the screenshot.` };
+        }
 
         case "point":
           await moveCursorToElement(targetElement, toolInput.label);
@@ -1083,10 +1275,11 @@
         } finally {
           currentToolBatch = null;
         }
+        const resultText = truncateText(toolOutcome.text, 20000); // keep line breaks: snapshots are line-based
         toolResults.push({
           type: "tool_result",
           tool_use_id: toolUse.id,
-          content: truncateText(toolOutcome.text, 20000), // keep line breaks: snapshots are line-based
+          content: toolOutcome.extraBlocks?.length ? [{ type: "text", text: resultText }, ...toolOutcome.extraBlocks] : resultText,
           ...(toolOutcome.isError ? { is_error: true } : {}),
         });
       }
@@ -1170,16 +1363,22 @@
     }
 
     async function runTask(request, modeKey) {
+      requestTabShareDuringUserGesture(); // must happen before anything awaits
       if (!hasRecentConversation() && !activePlan) conversationMessages = [];
       const abortController = beginWorking();
       currentStepCount = 0;
       progressSteps = [];
       narrate("Looking at the page");
       const snapshotText = refreshSnapshot();
+      const screenshot = await captureScreenshot();
+      if (abortController.signal.aborted) return;
       const modeLine = modeKey && MODE_LABELS[modeKey] ? `[Mode: ${MODE_LABELS[modeKey]}]\n` : "";
       conversationMessages.push({
         role: "user",
-        content: [{ type: "text", text: `${modeLine}${request}\n\n<page_snapshot>\n${snapshotText}\n</page_snapshot>` }],
+        content: [
+          { type: "text", text: `${modeLine}${request}\n\n<page_snapshot>\n${snapshotText}\n</page_snapshot>` },
+          ...buildScreenshotBlocks(screenshot),
+        ],
       });
       await continueAgentLoop(abortController);
     }
@@ -1205,12 +1404,17 @@
       progressSteps = [];
       narrate("Checking your progress");
       const snapshotText = refreshSnapshot();
+      const screenshot = await captureScreenshot();
+      if (abortController.signal.aborted) return;
       conversationMessages.push({
         role: "user",
-        content: [{
-          type: "text",
-          text: `[Guide check-in] ${userActivityDescription} Check the plan against the page: complete_step for anything now finished, then point at what to do next, or steer me back if I've drifted. Reply in one short sentence.\n\n<page_snapshot>\n${snapshotText}\n</page_snapshot>`,
-        }],
+        content: [
+          {
+            type: "text",
+            text: `[Guide check-in] ${userActivityDescription} Check the plan against the page: complete_step for anything now finished, then point at what to do next, or steer me back if I've drifted. Reply in one short sentence.\n\n<page_snapshot>\n${snapshotText}\n</page_snapshot>`,
+          },
+          ...buildScreenshotBlocks(screenshot),
+        ],
       });
       await continueAgentLoop(abortController);
     }
@@ -1357,6 +1561,7 @@
       destroy() {
         endGuide();
         close();
+        tabShareStream?.getTracks().forEach((track) => track.stop());
         pageEventListeners.forEach((removeListener) => removeListener());
         agentInterface.hostElement.remove();
       },

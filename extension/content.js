@@ -13,6 +13,7 @@
 
   CursorAgent.init({
     showCursor: showCursorAlways ? "always" : "active",
+    captureVisibleTab: () => chrome.runtime.sendMessage({ type: "capture-tab" }),
     transport: {
       requestAgentStep(requestBody, abortSignal) {
         return new Promise((resolve, reject) => {

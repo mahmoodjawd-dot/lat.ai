@@ -59,6 +59,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "state-clear":
       chrome.storage.session.remove(tabStateKey(tabId)).then(() => sendResponse(true));
       return true;
+    case "capture-tab":
+      // The extension's own capture of the visible tab: no permission prompt for the user.
+      chrome.tabs
+        .captureVisibleTab(sender.tab.windowId, { format: "jpeg", quality: 80 })
+        .then(sendResponse)
+        .catch(() => sendResponse(null));
+      return true;
     case "open-options":
       chrome.runtime.openOptionsPage();
       return false;
