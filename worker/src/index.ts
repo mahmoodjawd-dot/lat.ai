@@ -1,62 +1,50 @@
 /**
- * Clicky Web proxy Worker
+ * Cursor Agent Worker
  *
- * Serves the web home from ../web (static assets) and proxies the three APIs
- * Clicky needs, so no API key ever reaches the browser or the extension.
+ * Serves the SDK (/cursor-agent.js) and the demo site from ../web as static
+ * files, and runs agent steps for the SDK so the Anthropic key never reaches
+ * a browser.
  *
- * Routes:
- *   POST /api/config            → which voice features are switched on
- *   POST /api/chat              → Claude (streamed back as newline-delimited JSON events)
- *   POST /api/tts               → ElevenLabs text-to-speech (audio/mpeg)
- *   POST /api/transcribe-token  → short-lived AssemblyAI streaming token
+ * Route:
+ *   POST /api/agent → one Claude step: { messages, siteActions } in,
+ *                      { content, stop_reason, stop_details } out.
+ *                      The SDK runs the tools on the page and calls again.
  *
- * Access control: browsers may only call these routes from this Worker's own
- * origin or an origin listed in ALLOWED_ORIGINS (e.g. your extension's
- * chrome-extension://<id>). If the ACCESS_TOKEN secret is set, every request
- * must also send it in the x-clicky-token header.
- *
- * Only ANTHROPIC_API_KEY is required. Without ASSEMBLYAI_API_KEY the apps
- * take typed questions only; without ELEVENLABS_API_KEY replies are text only.
+ * Access control: browsers may only call /api/agent from this Worker's own
+ * origin or an origin listed in ALLOWED_ORIGINS (sites embedding the SDK, or
+ * the extension's chrome-extension://<id>). If the ACCESS_TOKEN secret is set,
+ * every request must also send it in the x-cursor-agent-token header.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { findClickyById } from "../../web/shared/clickys.js";
-import { buildSystemPrompt } from "./prompt";
+import { AGENT_SYSTEM_PROMPT, BUILT_IN_TOOLS, BUILT_IN_TOOL_NAMES } from "./agent";
 
 interface Env {
   ANTHROPIC_API_KEY: string;
-  ASSEMBLYAI_API_KEY?: string;
-  ELEVENLABS_API_KEY?: string;
-  ELEVENLABS_VOICE_ID: string;
   CLAUDE_MODEL?: string;
+  AGENT_EFFORT?: string;
   ALLOWED_ORIGINS?: string;
   ACCESS_TOKEN?: string;
 }
 
-interface ChatHistoryTurn {
-  userText: string;
-  assistantText: string;
+interface SiteAction {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
 }
 
-interface ChatScreenshot {
-  base64: string;
-  mediaType: "image/jpeg" | "image/png" | "image/webp";
-  width: number;
-  height: number;
+interface AgentRequestBody {
+  messages: Anthropic.Beta.BetaMessageParam[];
+  siteActions?: SiteAction[];
 }
 
-interface ChatRequestBody {
-  clickyId: string;
-  transcript: string;
-  history?: ChatHistoryTurn[];
-  screenshot?: ChatScreenshot | null;
-}
-
-const MAX_TRANSCRIPT_CHARACTERS = 4000;
-const MAX_HISTORY_TURNS = 10;
-const MAX_SCREENSHOT_BASE64_CHARACTERS = 6_000_000;
-const MAX_TTS_CHARACTERS = 2500;
-const ALLOWED_SCREENSHOT_MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const MAX_REQUEST_BYTES = 4_000_000;
+const MAX_MESSAGES = 80;
+const MAX_SITE_ACTIONS = 20;
+const MAX_SITE_ACTION_SCHEMA_CHARACTERS = 4000;
+const SITE_ACTION_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -74,41 +62,24 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: originIsAllowed ? 204 : 403, headers: corsHeaders });
     }
-
     if (!originIsAllowed) {
-      return jsonResponse({ error: "Origin not allowed" }, 403, corsHeaders);
+      return jsonResponse({ error: `Origin ${requestOrigin} is not in ALLOWED_ORIGINS` }, 403, corsHeaders);
     }
-
-    if (env.ACCESS_TOKEN && request.headers.get("x-clicky-token") !== env.ACCESS_TOKEN) {
+    if (env.ACCESS_TOKEN && request.headers.get("x-cursor-agent-token") !== env.ACCESS_TOKEN) {
       return jsonResponse({ error: "Missing or wrong access token" }, 401, corsHeaders);
     }
-
     if (request.method !== "POST") {
       return new Response("Method not allowed", { status: 405, headers: corsHeaders });
     }
 
     try {
-      if (url.pathname === "/api/config") {
-        return jsonResponse(
-          { voiceInput: Boolean(env.ASSEMBLYAI_API_KEY), voiceOutput: Boolean(env.ELEVENLABS_API_KEY) },
-          200,
-          corsHeaders,
-        );
-      }
-      if (url.pathname === "/api/chat") {
-        return await handleChat(request, env, corsHeaders);
-      }
-      if (url.pathname === "/api/tts") {
-        return await handleTTS(request, env, corsHeaders);
-      }
-      if (url.pathname === "/api/transcribe-token") {
-        return await handleTranscribeToken(env, corsHeaders);
+      if (url.pathname === "/api/agent") {
+        return await handleAgentStep(request, env, corsHeaders);
       }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);
       return jsonResponse({ error: String(error) }, 500, corsHeaders);
     }
-
     return new Response("Not found", { status: 404, headers: corsHeaders });
   },
 };
@@ -136,21 +107,10 @@ function buildCorsHeaders(allowedOrigin: string | null): Record<string, string> 
   return {
     "access-control-allow-origin": allowedOrigin,
     "access-control-allow-methods": "POST, OPTIONS",
-    "access-control-allow-headers": "content-type, x-clicky-token",
+    "access-control-allow-headers": "content-type, x-cursor-agent-token",
     "access-control-max-age": "86400",
     vary: "origin",
   };
-}
-
-/**
- * An upstream 401/403 means one of the Worker's own API keys is wrong. Report
- * it as 502 so the app doesn't mistake it for a bad access token or origin.
- */
-function upstreamErrorStatus(upstreamStatus: number | undefined): number {
-  if (!upstreamStatus || upstreamStatus === 401 || upstreamStatus === 403) {
-    return 502;
-  }
-  return upstreamStatus;
 }
 
 function jsonResponse(body: unknown, status: number, corsHeaders: Record<string, string>): Response {
@@ -160,159 +120,96 @@ function jsonResponse(body: unknown, status: number, corsHeaders: Record<string,
   });
 }
 
-async function handleChat(request: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
-  const chatRequestBody = (await request.json()) as ChatRequestBody;
-
-  const clicky = findClickyById(chatRequestBody.clickyId);
-  if (!clicky) {
-    return jsonResponse({ error: "Unknown clickyId" }, 400, corsHeaders);
+/** Turns the site actions a page registered into Claude tools, rejecting anything malformed. */
+function buildSiteActionTools(siteActions: unknown): Anthropic.Beta.BetaTool[] | string {
+  if (siteActions === undefined) {
+    return [];
   }
-
-  const transcript = String(chatRequestBody.transcript ?? "").trim();
-  if (!transcript || transcript.length > MAX_TRANSCRIPT_CHARACTERS) {
-    return jsonResponse({ error: "Transcript is empty or too long" }, 400, corsHeaders);
+  if (!Array.isArray(siteActions) || siteActions.length > MAX_SITE_ACTIONS) {
+    return `siteActions must be an array of at most ${MAX_SITE_ACTIONS}`;
   }
-
-  const screenshot = chatRequestBody.screenshot ?? null;
-  if (screenshot) {
-    const screenshotIsValid =
-      ALLOWED_SCREENSHOT_MEDIA_TYPES.includes(screenshot.mediaType) &&
-      typeof screenshot.base64 === "string" &&
-      screenshot.base64.length <= MAX_SCREENSHOT_BASE64_CHARACTERS &&
-      Number.isInteger(screenshot.width) &&
-      Number.isInteger(screenshot.height);
-    if (!screenshotIsValid) {
-      return jsonResponse({ error: "Invalid screenshot" }, 400, corsHeaders);
+  const siteActionTools: Anthropic.Beta.BetaTool[] = [];
+  for (const siteAction of siteActions as SiteAction[]) {
+    const nameIsValid =
+      typeof siteAction?.name === "string" &&
+      SITE_ACTION_NAME_PATTERN.test(siteAction.name) &&
+      !BUILT_IN_TOOL_NAMES.has(siteAction.name);
+    const parameters = siteAction?.parameters ?? { type: "object", properties: {} };
+    const parametersAreValid =
+      typeof parameters === "object" &&
+      parameters !== null &&
+      (parameters as { type?: unknown }).type === "object" &&
+      JSON.stringify(parameters).length <= MAX_SITE_ACTION_SCHEMA_CHARACTERS;
+    if (!nameIsValid || !parametersAreValid) {
+      return `Invalid site action: ${String(siteAction?.name)}`;
     }
+    siteActionTools.push({
+      name: siteAction.name,
+      description: `Site action provided by this page. ${String(siteAction.description ?? "").slice(0, 1000)}`,
+      input_schema: parameters as Anthropic.Beta.BetaTool.InputSchema,
+    });
+  }
+  return siteActionTools;
+}
+
+async function handleAgentStep(request: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
+  const requestBodyText = await request.text();
+  if (requestBodyText.length > MAX_REQUEST_BYTES) {
+    return jsonResponse({ error: "Request too large; start a new conversation" }, 413, corsHeaders);
+  }
+  const agentRequestBody = JSON.parse(requestBodyText) as AgentRequestBody;
+
+  const messages = agentRequestBody.messages;
+  if (!Array.isArray(messages) || messages.length === 0 || messages.length > MAX_MESSAGES) {
+    return jsonResponse({ error: `messages must have 1 to ${MAX_MESSAGES} entries` }, 400, corsHeaders);
   }
 
-  // Earlier turns are sent as text only; only the newest turn carries a
-  // screenshot. That keeps each request small while Claude still remembers
-  // the conversation.
-  const recentHistoryTurns = (chatRequestBody.history ?? []).slice(-MAX_HISTORY_TURNS);
-  const messages: Anthropic.Beta.BetaMessageParam[] = [];
-  for (const historyTurn of recentHistoryTurns) {
-    messages.push({ role: "user", content: String(historyTurn.userText).slice(0, MAX_TRANSCRIPT_CHARACTERS) });
-    messages.push({ role: "assistant", content: String(historyTurn.assistantText).slice(0, MAX_TRANSCRIPT_CHARACTERS) });
+  const siteActionTools = buildSiteActionTools(agentRequestBody.siteActions);
+  if (typeof siteActionTools === "string") {
+    return jsonResponse({ error: siteActionTools }, 400, corsHeaders);
   }
 
-  const newestTurnContent: Anthropic.Beta.BetaContentBlockParam[] = [];
-  if (screenshot) {
-    newestTurnContent.push({
-      type: "image",
-      source: { type: "base64", media_type: screenshot.mediaType, data: screenshot.base64 },
-    });
-    newestTurnContent.push({
-      type: "text",
-      text: `(screenshot of the user's screen, ${screenshot.width}x${screenshot.height} pixels)`,
-    });
-  } else {
-    newestTurnContent.push({ type: "text", text: "(no screenshot this turn: the user isn't sharing a screen)" });
-  }
-  newestTurnContent.push({ type: "text", text: transcript });
-  messages.push({ role: "user", content: newestTurnContent });
+  const effort: EffortLevel = EFFORT_LEVELS.includes(env.AGENT_EFFORT as EffortLevel)
+    ? (env.AGENT_EFFORT as EffortLevel)
+    : "low";
 
   const anthropicClient = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  let claudeEventStream;
   try {
-    // Awaiting create() waits for Claude's response headers, so a bad key,
-    // rate limit or outage becomes a real HTTP error the app can show,
-    // instead of an empty 200 stream.
-    claudeEventStream = await anthropicClient.beta.messages.create({
+    const agentMessage = await anthropicClient.beta.messages.create({
       model: env.CLAUDE_MODEL || "claude-opus-5-5",
-      max_tokens: 8000,
-      // Low effort keeps spoken replies quick; raise it if answers feel shallow.
-      output_config: { effort: "low" },
-      system: buildSystemPrompt(clicky.focus),
+      max_tokens: 16000,
+      output_config: { effort },
+      system: AGENT_SYSTEM_PROMPT,
+      tools: [...BUILT_IN_TOOLS, ...siteActionTools],
       messages,
-      stream: true,
+      // The system prompt and tools repeat on every step of a task; caching
+      // them makes the later steps cheaper and faster.
+      cache_control: { type: "ephemeral" },
       // If Claude's safety classifiers decline, retry on Anthropic's
       // recommended fallback model instead of returning a refusal.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
     });
+
+    // The SDK must send `content` back unchanged on the next step (thinking
+    // blocks included), so it is returned as-is.
+    return jsonResponse(
+      {
+        content: agentMessage.content,
+        stop_reason: agentMessage.stop_reason,
+        stop_details: agentMessage.stop_details ?? null,
+      },
+      200,
+      corsHeaders,
+    );
   } catch (error) {
     if (error instanceof Anthropic.APIError) {
-      console.error(`[/api/chat] Claude API error ${error.status}: ${error.message}`);
-      return jsonResponse({ error: `Claude: ${error.message}` }, upstreamErrorStatus(error.status), corsHeaders);
+      console.error(`[/api/agent] Claude API error ${error.status}: ${error.message}`);
+      // An upstream 401/403 means the Worker's own key is wrong; report it as
+      // 502 so the SDK doesn't mistake it for a bad access token or origin.
+      const status = !error.status || error.status === 401 || error.status === 403 ? 502 : error.status;
+      return jsonResponse({ error: `Claude: ${error.message}` }, status, corsHeaders);
     }
     throw error;
   }
-
-  // Each line of the body is one raw Messages API stream event as JSON.
-  return new Response(claudeEventStream.toReadableStream(), {
-    status: 200,
-    headers: {
-      ...corsHeaders,
-      "content-type": "application/x-ndjson",
-      "cache-control": "no-cache",
-    },
-  });
-}
-
-async function handleTTS(request: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
-  if (!env.ELEVENLABS_API_KEY) {
-    return jsonResponse({ error: "Voice replies aren't set up: add the ELEVENLABS_API_KEY secret" }, 501, corsHeaders);
-  }
-  const { clickyId, text } = (await request.json()) as { clickyId: string; text: string };
-
-  const clicky = findClickyById(clickyId);
-  const spokenText = String(text ?? "").trim();
-  if (!clicky || !spokenText || spokenText.length > MAX_TTS_CHARACTERS) {
-    return jsonResponse({ error: "Unknown clickyId, or text is empty or too long" }, 400, corsHeaders);
-  }
-
-  const voiceId = clicky.voiceId ?? env.ELEVENLABS_VOICE_ID;
-  const elevenLabsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-    method: "POST",
-    headers: {
-      "xi-api-key": env.ELEVENLABS_API_KEY,
-      "content-type": "application/json",
-      accept: "audio/mpeg",
-    },
-    body: JSON.stringify({
-      text: spokenText,
-      model_id: "eleven_flash_v2_5",
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-    }),
-  });
-
-  if (!elevenLabsResponse.ok) {
-    const errorBody = await elevenLabsResponse.text();
-    console.error(`[/api/tts] ElevenLabs error ${elevenLabsResponse.status}: ${errorBody}`);
-    return jsonResponse(
-      { error: `ElevenLabs ${elevenLabsResponse.status}: ${errorBody.slice(0, 300)}` },
-      upstreamErrorStatus(elevenLabsResponse.status),
-      corsHeaders,
-    );
-  }
-
-  return new Response(elevenLabsResponse.body, {
-    status: 200,
-    headers: { ...corsHeaders, "content-type": "audio/mpeg" },
-  });
-}
-
-async function handleTranscribeToken(env: Env, corsHeaders: Record<string, string>): Promise<Response> {
-  if (!env.ASSEMBLYAI_API_KEY) {
-    return jsonResponse({ error: "Voice input isn't set up: add the ASSEMBLYAI_API_KEY secret" }, 501, corsHeaders);
-  }
-  const assemblyAIResponse = await fetch("https://streaming.assemblyai.com/v3/token?expires_in_seconds=480", {
-    method: "GET",
-    headers: { authorization: env.ASSEMBLYAI_API_KEY },
-  });
-
-  const responseBody = await assemblyAIResponse.text();
-  if (!assemblyAIResponse.ok) {
-    console.error(`[/api/transcribe-token] AssemblyAI error ${assemblyAIResponse.status}: ${responseBody}`);
-    return jsonResponse(
-      { error: `AssemblyAI ${assemblyAIResponse.status}: ${responseBody.slice(0, 300)}` },
-      upstreamErrorStatus(assemblyAIResponse.status),
-      corsHeaders,
-    );
-  }
-  return new Response(responseBody, {
-    status: 200,
-    headers: { ...corsHeaders, "content-type": "application/json" },
-  });
 }

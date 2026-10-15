@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cursor Agent options</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 40px 16px; background: #f6f7f9; color: #111827; font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    main { max-width: 520px; margin: 0 auto; padding: 28px; background: #fff; border-radius: 16px; box-shadow: 0 0 0 1px #e5e7eb; }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    p { margin: 0 0 18px; color: #6b7280; }
+    form { display: flex; flex-direction: column; gap: 16px; }
+    label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; }
+    label.checkbox { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
+    input[type=url], input[type=password] { padding: 9px 12px; font: inherit; font-weight: 400; border: 1.5px solid #d1d5db; border-radius: 10px; }
+    input:focus { outline: none; border-color: #111827; }
+    .origin { padding: 12px; border-radius: 10px; background: #f6f7f9; font-size: 13px; color: #374151; }
+    .origin-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+    code { flex: 1; min-width: 0; overflow-wrap: anywhere; font: 12px ui-monospace, Menlo, monospace; }
+    button { padding: 9px 16px; border: 0; border-radius: 10px; background: #111827; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    button.secondary { padding: 5px 10px; background: #e5e7eb; color: #111827; font-size: 13px; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+    .saved { color: #059669; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Cursor Agent</h1>
+    <p>Press <strong>ctrl + option</strong> on any page (or click the toolbar icon) to open the agent from your cursor.</p>
+    <form id="options-form">
+      <label>Cursor Agent address <input type="url" id="endpoint" placeholder="https://cursor-agent.yourname.workers.dev" required></label>
+      <label>Access token (optional) <input type="password" id="access-token" autocomplete="off" placeholder="Only if your Worker sets ACCESS_TOKEN"></label>
+      <label class="checkbox"><input type="checkbox" id="show-cursor-always"> Show the second cursor all the time (otherwise only while the agent is open)</label>
+      <div class="origin">
+        Add this to <code>ALLOWED_ORIGINS</code> in your Worker's <code>wrangler.toml</code>, then deploy:
+        <div class="origin-row"><code id="extension-origin"></code><button type="button" class="secondary" id="copy-origin">Copy</button></div>
+      </div>
+      <div><button type="submit">Save</button> <span class="saved" id="saved" role="status"></span></div>
+    </form>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

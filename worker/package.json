@@ -1,5 +1,5 @@
 {
-  "name": "clicky-web-worker",
+  "name": "cursor-agent-worker",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
