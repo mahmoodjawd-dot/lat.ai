@@ -21,6 +21,8 @@ export function createClickyConversation({ api, captureScreenshot, onEvent }) {
   let currentState = "idle";
   let currentAbortController = null;
   let currentAudioElement = null;
+  // Off until the Worker has an ElevenLabs key; replies are then text only.
+  let speakRepliesAloud = true;
 
   const transcriber = createPushToTalkTranscriber({
     fetchTranscribeToken: () => api.fetchTranscribeToken(),
@@ -60,6 +62,15 @@ export function createClickyConversation({ api, captureScreenshot, onEvent }) {
     }
   }
 
+  function captureScreenshotSafely() {
+    return Promise.resolve()
+      .then(() => captureScreenshot())
+      .catch((error) => {
+        console.warn("Screenshot failed; asking without one.", error);
+        return null;
+      });
+  }
+
   async function stopListeningAndRespond() {
     if (currentState !== "listening") {
       return;
@@ -69,12 +80,7 @@ export function createClickyConversation({ api, captureScreenshot, onEvent }) {
 
     // Take the screenshot at release, while the user is still looking at
     // what they asked about, in parallel with finalizing the transcript.
-    const screenshotPromise = Promise.resolve()
-      .then(() => captureScreenshot())
-      .catch((error) => {
-        console.warn("Screenshot failed; asking without one.", error);
-        return null;
-      });
+    const screenshotPromise = captureScreenshotSafely();
     const transcript = await transcriber.stop().catch(() => "");
     const screenshot = await screenshotPromise;
 
@@ -84,7 +90,25 @@ export function createClickyConversation({ api, captureScreenshot, onEvent }) {
       return;
     }
     onEvent({ type: "transcript", text: transcript });
+    await respondTo(respondingClicky, transcript, screenshot);
+  }
 
+  /** Same pipeline as push-to-talk, for a question typed into the panel. */
+  async function askTypedQuestion(typedQuestion) {
+    const question = typedQuestion.trim();
+    if (!activeClicky || !question) {
+      return;
+    }
+    transcriber.cancel();
+    stopSpeakingAndRequests();
+    const respondingClicky = activeClicky;
+    setState("thinking");
+    onEvent({ type: "transcript", text: question });
+    const screenshot = await captureScreenshotSafely();
+    await respondTo(respondingClicky, question, screenshot);
+  }
+
+  async function respondTo(respondingClicky, transcript, screenshot) {
     const abortController = new AbortController();
     currentAbortController = abortController;
     const clickyHistory = historyByClickyId.get(respondingClicky.id) ?? [];
@@ -111,7 +135,7 @@ export function createClickyConversation({ api, captureScreenshot, onEvent }) {
         onEvent({ type: "point", fx: point.x / screenshot.width, fy: point.y / screenshot.height, label: point.label });
       }
 
-      if (spokenText) {
+      if (spokenText && speakRepliesAloud) {
         setState("speaking");
         const speechAudioBlob = await api.fetchSpeechAudio({
           clickyId: respondingClicky.id,
@@ -169,8 +193,12 @@ export function createClickyConversation({ api, captureScreenshot, onEvent }) {
       historyByClickyId.delete(clickyId);
     },
     getState: () => currentState,
+    setSpeakRepliesAloud(shouldSpeak) {
+      speakRepliesAloud = shouldSpeak;
+    },
     startListening,
     stopListeningAndRespond,
+    askTypedQuestion,
     cancel,
   };
 

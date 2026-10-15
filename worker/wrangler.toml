@@ -18,5 +18,7 @@ CLAUDE_MODEL = "claude-opus-5-5"
 ALLOWED_ORIGINS = ""
 
 # Secrets (set with `npx wrangler secret put <NAME>`, never in this file):
-#   ANTHROPIC_API_KEY, ASSEMBLYAI_API_KEY, ELEVENLABS_API_KEY
-#   ACCESS_TOKEN (optional: require x-clicky-token on every request)
+#   ANTHROPIC_API_KEY  (required)
+#   ASSEMBLYAI_API_KEY (optional: enables talking to Clickys)
+#   ELEVENLABS_API_KEY (optional: enables spoken replies)
+#   ACCESS_TOKEN       (optional: require x-clicky-token on every request)

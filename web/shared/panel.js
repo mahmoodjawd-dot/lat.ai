@@ -30,6 +30,10 @@ export function mountClickyPanel(rootElement, { clickys, conversation, shortcutH
         <span class="level-meter"><span class="level-fill"></span></span>
       </button>
       <div class="shortcut-hint"></div>
+      <form class="ask-form">
+        <input class="ask-input" type="text" placeholder="Type a question…" aria-label="Ask a question" autocomplete="off">
+        <button type="submit" class="ask-button">Ask</button>
+      </form>
       <div class="error-line" role="alert"></div>
     </div>
     <div class="panel-section log-section">
@@ -45,7 +49,10 @@ export function mountClickyPanel(rootElement, { clickys, conversation, shortcutH
   const levelFillElement = rootElement.querySelector(".level-fill");
   const errorLineElement = rootElement.querySelector(".error-line");
   const conversationLogElement = rootElement.querySelector(".conversation-log");
-  rootElement.querySelector(".shortcut-hint").textContent = shortcutHint ?? "";
+  const shortcutHintElement = rootElement.querySelector(".shortcut-hint");
+  const askFormElement = rootElement.querySelector(".ask-form");
+  const askInputElement = rootElement.querySelector(".ask-input");
+  shortcutHintElement.textContent = shortcutHint ?? "";
 
   let liveUserBubbleElement = null;
   let liveReplyBubbleElement = null;
@@ -73,6 +80,21 @@ export function mountClickyPanel(rootElement, { clickys, conversation, shortcutH
   const releaseTalkButton = () => conversation.stopListeningAndRespond();
   talkButtonElement.addEventListener("pointerup", releaseTalkButton);
   talkButtonElement.addEventListener("pointercancel", releaseTalkButton);
+
+  askFormElement.addEventListener("submit", (submitEvent) => {
+    submitEvent.preventDefault();
+    const typedQuestion = askInputElement.value;
+    if (typedQuestion.trim()) {
+      askInputElement.value = "";
+      conversation.askTypedQuestion(typedQuestion);
+    }
+  });
+
+  /** Hide the hold-to-talk controls when the Worker has no AssemblyAI key. */
+  function setVoiceInputAvailable(voiceInputAvailable) {
+    talkButtonElement.hidden = !voiceInputAvailable;
+    shortcutHintElement.hidden = !voiceInputAvailable;
+  }
 
   rootElement.querySelector(".clear-button").addEventListener("click", () => {
     const activeClicky = conversation.getActiveClicky();
@@ -168,5 +190,5 @@ export function mountClickyPanel(rootElement, { clickys, conversation, shortcutH
   }
 
   selectClicky(clickys[0].id);
-  return { handleConversationEvent, selectClicky };
+  return { handleConversationEvent, selectClicky, setVoiceInputAvailable };
 }

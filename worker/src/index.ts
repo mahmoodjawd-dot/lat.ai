@@ -5,6 +5,7 @@
  * Clicky needs, so no API key ever reaches the browser or the extension.
  *
  * Routes:
+ *   POST /api/config            → which voice features are switched on
  *   POST /api/chat              → Claude (streamed back as newline-delimited JSON events)
  *   POST /api/tts               → ElevenLabs text-to-speech (audio/mpeg)
  *   POST /api/transcribe-token  → short-lived AssemblyAI streaming token
@@ -13,6 +14,9 @@
  * origin or an origin listed in ALLOWED_ORIGINS (e.g. your extension's
  * chrome-extension://<id>). If the ACCESS_TOKEN secret is set, every request
  * must also send it in the x-clicky-token header.
+ *
+ * Only ANTHROPIC_API_KEY is required. Without ASSEMBLYAI_API_KEY the apps
+ * take typed questions only; without ELEVENLABS_API_KEY replies are text only.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -21,8 +25,8 @@ import { buildSystemPrompt } from "./prompt";
 
 interface Env {
   ANTHROPIC_API_KEY: string;
-  ASSEMBLYAI_API_KEY: string;
-  ELEVENLABS_API_KEY: string;
+  ASSEMBLYAI_API_KEY?: string;
+  ELEVENLABS_API_KEY?: string;
   ELEVENLABS_VOICE_ID: string;
   CLAUDE_MODEL?: string;
   ALLOWED_ORIGINS?: string;
@@ -84,6 +88,13 @@ export default {
     }
 
     try {
+      if (url.pathname === "/api/config") {
+        return jsonResponse(
+          { voiceInput: Boolean(env.ASSEMBLYAI_API_KEY), voiceOutput: Boolean(env.ELEVENLABS_API_KEY) },
+          200,
+          corsHeaders,
+        );
+      }
       if (url.pathname === "/api/chat") {
         return await handleChat(request, env, corsHeaders);
       }
@@ -240,6 +251,9 @@ async function handleChat(request: Request, env: Env, corsHeaders: Record<string
 }
 
 async function handleTTS(request: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
+  if (!env.ELEVENLABS_API_KEY) {
+    return jsonResponse({ error: "Voice replies aren't set up: add the ELEVENLABS_API_KEY secret" }, 501, corsHeaders);
+  }
   const { clickyId, text } = (await request.json()) as { clickyId: string; text: string };
 
   const clicky = findClickyById(clickyId);
@@ -280,6 +294,9 @@ async function handleTTS(request: Request, env: Env, corsHeaders: Record<string,
 }
 
 async function handleTranscribeToken(env: Env, corsHeaders: Record<string, string>): Promise<Response> {
+  if (!env.ASSEMBLYAI_API_KEY) {
+    return jsonResponse({ error: "Voice input isn't set up: add the ASSEMBLYAI_API_KEY secret" }, 501, corsHeaders);
+  }
   const assemblyAIResponse = await fetch("https://streaming.assemblyai.com/v3/token?expires_in_seconds=480", {
     method: "GET",
     headers: { authorization: env.ASSEMBLYAI_API_KEY },

@@ -10,7 +10,8 @@ import { installPushToTalkKeys } from "./shared/keyboard.js";
 import { mountClickyPanel } from "./shared/panel.js";
 
 const ACCESS_TOKEN_STORAGE_KEY = "clicky-access-token";
-const BUBBLE_LINGER_AFTER_REPLY_MS = 5000;
+const BUBBLE_LINGER_AFTER_SPOKEN_REPLY_MS = 5000;
+const BUBBLE_LINGER_AFTER_TEXT_REPLY_MS = 12000;
 
 const dockGridElement = document.getElementById("dock-grid");
 const shareButtonElement = document.getElementById("share-button");
@@ -22,6 +23,9 @@ const accessTokenInputElement = document.getElementById("access-token-input");
 
 let sharedScreenStream = null;
 let hideBubbleTimeoutId = null;
+// Both stay off until the Worker reports it has the AssemblyAI / ElevenLabs keys.
+let voiceInputAvailable = false;
+let voiceOutputAvailable = false;
 
 // localStorage can throw (private windows, blocked storage); the token is a
 // convenience, so fall back to "none".
@@ -80,7 +84,9 @@ function handleConversationEvent(conversationEvent) {
       } else if (conversationEvent.state === "thinking") {
         cursor.setBubbleText("thinking…");
       } else if (conversationEvent.state === "idle") {
-        hideBubbleTimeoutId = setTimeout(() => cursor.setBubbleText(null), BUBBLE_LINGER_AFTER_REPLY_MS);
+        // Text-only replies need longer on screen since nobody reads them aloud.
+        const bubbleLingerMs = voiceOutputAvailable ? BUBBLE_LINGER_AFTER_SPOKEN_REPLY_MS : BUBBLE_LINGER_AFTER_TEXT_REPLY_MS;
+        hideBubbleTimeoutId = setTimeout(() => cursor.setBubbleText(null), bubbleLingerMs);
       }
       break;
     case "reply":
@@ -143,9 +149,28 @@ panel.selectClicky(conversation.getActiveClicky().id);
 
 installPushToTalkKeys({
   allowSpaceKey: true,
-  onPress: () => conversation.startListening(),
+  onPress: () => {
+    if (voiceInputAvailable) {
+      conversation.startListening();
+    }
+  },
   onRelease: () => conversation.stopListeningAndRespond(),
 });
+
+async function applyVoiceConfig() {
+  let voiceConfig = { voiceInput: false, voiceOutput: false };
+  try {
+    voiceConfig = await api.fetchVoiceConfig();
+  } catch (error) {
+    console.warn("Couldn't read the Worker's voice settings; using typed questions only.", error);
+  }
+  voiceInputAvailable = voiceConfig.voiceInput;
+  voiceOutputAvailable = voiceConfig.voiceOutput;
+  panel.setVoiceInputAvailable(voiceInputAvailable);
+  conversation.setSpeakRepliesAloud(voiceOutputAvailable);
+}
+panel.setVoiceInputAvailable(false);
+applyVoiceConfig();
 
 screenFrameElement.addEventListener("pointermove", (pointerEvent) => {
   const frameRect = screenFrameElement.getBoundingClientRect();
@@ -198,5 +223,6 @@ document.getElementById("settings-button").addEventListener("click", openSetting
 settingsDialogElement.addEventListener("close", () => {
   if (settingsDialogElement.returnValue === "save") {
     storeAccessToken(accessTokenInputElement.value.trim());
+    applyVoiceConfig();
   }
 });

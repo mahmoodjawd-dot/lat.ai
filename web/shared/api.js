@@ -84,6 +84,13 @@ export function createClickyApi({ workerBaseUrl = "", accessToken = "", requireW
     return response.blob();
   }
 
+  /** Which voice features the Worker has keys for. */
+  async function fetchVoiceConfig() {
+    const response = await postJson("/api/config");
+    const { voiceInput, voiceOutput } = await response.json();
+    return { voiceInput: Boolean(voiceInput), voiceOutput: Boolean(voiceOutput) };
+  }
+
   async function fetchTranscribeToken() {
     const response = await postJson("/api/transcribe-token");
     const { token } = await response.json();
@@ -93,5 +100,5 @@ export function createClickyApi({ workerBaseUrl = "", accessToken = "", requireW
     return token;
   }
 
-  return { streamChat, fetchSpeechAudio, fetchTranscribeToken };
+  return { fetchVoiceConfig, streamChat, fetchSpeechAudio, fetchTranscribeToken };
 }

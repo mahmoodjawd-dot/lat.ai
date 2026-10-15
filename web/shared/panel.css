@@ -17,6 +17,7 @@
 }
 
 .clicky-panel button { font: inherit; color: inherit; cursor: pointer; }
+.clicky-panel [hidden] { display: none !important; }
 
 .panel-section { display: flex; flex-direction: column; gap: 8px; }
 .panel-heading { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--panel-text-muted); }
@@ -74,6 +75,19 @@
 .clicky-panel[data-state="listening"] .talk-button { transform: scale(.98); filter: brightness(1.15); }
 .level-meter { width: 70%; height: 4px; border-radius: 2px; background: rgba(255,255,255,.25); overflow: hidden; }
 .level-fill { display: block; height: 100%; background: #fff; transform: scaleX(0); transform-origin: left; transition: transform 80ms linear; }
+
+.ask-form { display: flex; gap: 6px; }
+.ask-input {
+  flex: 1; min-width: 0; padding: 9px 11px; font: inherit; color: var(--panel-text);
+  background: var(--panel-background); border: 1px solid var(--panel-border); border-radius: 10px;
+}
+.ask-input:focus-visible { outline: 2px solid var(--clicky-color); outline-offset: 1px; }
+.ask-button {
+  padding: 0 14px; border: 1px solid color-mix(in srgb, var(--clicky-color) 60%, transparent); border-radius: 10px;
+  background: color-mix(in srgb, var(--clicky-color) 18%, transparent); font-weight: 600;
+}
+.ask-button:hover { background: color-mix(in srgb, var(--clicky-color) 30%, transparent); }
+.ask-button:focus-visible { outline: 2px solid var(--clicky-color); outline-offset: 2px; }
 
 .shortcut-hint { font-size: 12px; color: var(--panel-text-muted); text-align: center; }
 .error-line:empty { display: none; }

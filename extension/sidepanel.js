@@ -10,7 +10,8 @@ import { installPushToTalkKeys } from "./shared/keyboard.js";
 import { mountClickyPanel } from "./shared/panel.js";
 
 const CONTENT_SCRIPT_READY_TIMEOUT_MS = 1500;
-const BUBBLE_LINGER_AFTER_REPLY_MS = 5000;
+const BUBBLE_LINGER_AFTER_SPOKEN_REPLY_MS = 5000;
+const BUBBLE_LINGER_AFTER_TEXT_REPLY_MS = 12000;
 
 const settingsFormElement = document.getElementById("settings");
 const settingsToggleElement = document.getElementById("settings-toggle");
@@ -27,6 +28,9 @@ let cursorPort = null;
 let cursorConnectionGeneration = 0;
 let activeClickyColor = CLICKYS[0].color;
 let hideBubbleTimeoutId = null;
+// Both stay off until the Worker reports it has the AssemblyAI / ElevenLabs keys.
+let voiceInputAvailable = false;
+let voiceOutputAvailable = false;
 
 // ---------- settings ----------
 
@@ -49,6 +53,7 @@ settingsFormElement.addEventListener("submit", async (submitEvent) => {
   settings.accessToken = accessTokenInputElement.value.trim();
   await chrome.storage.local.set(settings);
   setSettingsVisible(false);
+  applyVoiceConfig();
 });
 document.getElementById("copy-origin").addEventListener("click", () => navigator.clipboard.writeText(extensionOrigin));
 
@@ -133,7 +138,7 @@ async function connectCursorToActiveTab() {
   showPageStatus(null);
   cursorPort = port;
   port.onMessage.addListener((contentMessage) => {
-    if (contentMessage.type !== "push-to-talk") {
+    if (contentMessage.type !== "push-to-talk" || !voiceInputAvailable) {
       return;
     }
     if (contentMessage.pressed) {
@@ -180,7 +185,9 @@ function handleConversationEvent(conversationEvent) {
       } else if (conversationEvent.state === "thinking") {
         sendToCursor({ type: "bubble", text: "thinking…" });
       } else if (conversationEvent.state === "idle") {
-        hideBubbleTimeoutId = setTimeout(() => sendToCursor({ type: "bubble", text: null }), BUBBLE_LINGER_AFTER_REPLY_MS);
+        // Text-only replies need longer on screen since nobody reads them aloud.
+        const bubbleLingerMs = voiceOutputAvailable ? BUBBLE_LINGER_AFTER_SPOKEN_REPLY_MS : BUBBLE_LINGER_AFTER_TEXT_REPLY_MS;
+        hideBubbleTimeoutId = setTimeout(() => sendToCursor({ type: "bubble", text: null }), bubbleLingerMs);
       }
       break;
     case "reply":
@@ -234,8 +241,29 @@ const panel = mountClickyPanel(document.getElementById("panel"), {
 
 installPushToTalkKeys({
   allowSpaceKey: true,
-  onPress: () => conversation.startListening(),
+  onPress: () => {
+    if (voiceInputAvailable) {
+      conversation.startListening();
+    }
+  },
   onRelease: () => conversation.stopListeningAndRespond(),
 });
+
+async function applyVoiceConfig() {
+  let voiceConfig = { voiceInput: false, voiceOutput: false };
+  if (settings.workerUrl) {
+    try {
+      voiceConfig = await api.fetchVoiceConfig();
+    } catch (error) {
+      console.warn("Couldn't read the Worker's voice settings; using typed questions only.", error);
+    }
+  }
+  voiceInputAvailable = voiceConfig.voiceInput;
+  voiceOutputAvailable = voiceConfig.voiceOutput;
+  panel.setVoiceInputAvailable(voiceInputAvailable);
+  conversation.setSpeakRepliesAloud(voiceOutputAvailable);
+}
+panel.setVoiceInputAvailable(false);
+applyVoiceConfig();
 
 connectCursorToActiveTab();
