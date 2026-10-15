@@ -5,9 +5,18 @@
 
 const CONTENT_SCRIPT_FILES = ["cursor-agent.js", "content.js"];
 
+/** Only the address's origin matters, so a pasted page link like …workers.dev/index.html still works. */
+function toOrigin(address) {
+  try {
+    return new URL(address.trim()).origin;
+  } catch {
+    return "";
+  }
+}
+
 async function readSettings() {
   const { endpoint = "", accessToken = "" } = await chrome.storage.local.get(["endpoint", "accessToken"]);
-  return { endpoint: endpoint.replace(/\/+$/, ""), accessToken };
+  return { endpoint: toOrigin(endpoint), accessToken };
 }
 
 async function requestAgentStep(requestBody) {
@@ -22,6 +31,9 @@ async function requestAgentStep(requestBody) {
     const responseBody = await response.json().catch(() => ({}));
     if (response.status === 403) {
       return { ok: false, error: `Your Worker rejected this extension. Add chrome-extension://${chrome.runtime.id} to ALLOWED_ORIGINS and redeploy.` };
+    }
+    if (response.status === 404) {
+      return { ok: false, error: `${endpoint} isn't a Cursor Agent Worker (no /api/agent there). Check the address in the extension's options, and that the Worker is deployed from the latest code.` };
     }
     if (!response.ok) return { ok: false, error: responseBody.error || `Agent request failed (${response.status})` };
     return { ok: true, data: responseBody };

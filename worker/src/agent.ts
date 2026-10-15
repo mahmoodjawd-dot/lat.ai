@@ -29,7 +29,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "point",
     description: "Move the cursor to an element to show the user where it is, without clicking it.",
-    strict: true,
     input_schema: {
       type: "object",
       properties: {
@@ -43,7 +42,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "click",
     description: "Move the cursor to an element and click it. Links may load a new page.",
-    strict: true,
     input_schema: {
       type: "object",
       properties: { element_id: ELEMENT_ID_PROPERTY },
@@ -54,7 +52,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "type",
     description: "Replace the text in an input, textarea or editable element. Set press_enter to submit, e.g. a search box.",
-    strict: true,
     input_schema: {
       type: "object",
       properties: {
@@ -69,7 +66,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "select_option",
     description: "Choose an option in a <select> dropdown by its visible text or value.",
-    strict: true,
     input_schema: {
       type: "object",
       properties: { element_id: ELEMENT_ID_PROPERTY, option: { type: "string" } },
@@ -80,7 +76,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "scroll",
     description: "Scroll the page up or down by most of a screen.",
-    strict: true,
     input_schema: {
       type: "object",
       properties: { direction: { type: "string", enum: ["up", "down"] } },
@@ -91,7 +86,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "navigate",
     description: "Load a URL in this tab. Use for addresses you know; prefer clicking links that are on the page.",
-    strict: true,
     input_schema: {
       type: "object",
       properties: { url: { type: "string", description: "An absolute http(s) URL, or a path on this site." } },
@@ -102,7 +96,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "set_plan",
     description: "Guide me mode: show the user a short checklist of steps toward their goal. Replaces any current plan.",
-    strict: true,
     input_schema: {
       type: "object",
       properties: {
@@ -116,7 +109,6 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "complete_step",
     description: "Guide me mode: tick off a finished step of the current plan (1 = first step).",
-    strict: true,
     input_schema: {
       type: "object",
       properties: { step_number: { type: "integer" } },
@@ -127,8 +119,7 @@ export const BUILT_IN_TOOLS: Anthropic.Beta.BetaTool[] = [
   {
     name: "read_page",
     description: "Get a fresh snapshot of the current page with new element ids. Call after anything that changed the page.",
-    strict: true,
-    input_schema: { type: "object", properties: {}, additionalProperties: false },
+    input_schema: { type: "object", properties: {}, required: [], additionalProperties: false },
   },
 ];
 
