@@ -1,0 +1,22 @@
+name = "clicky-web"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The web home (../web) is served as static files from the same Worker,
+# so the site and its /api/* routes share one origin and one deploy.
+[assets]
+directory = "../web"
+
+[vars]
+# Default ElevenLabs voice for Clickys whose voiceId is null.
+ELEVENLABS_VOICE_ID = "kPzsL2i3teMYv0FxEYQ6"
+# Claude model for every Clicky.
+CLAUDE_MODEL = "claude-opus-5-5"
+# Comma-separated extra origins allowed to call /api/* from a browser.
+# Add your extension once you know its ID: "chrome-extension://abcdefghijklmnop..."
+ALLOWED_ORIGINS = ""
+
+# Secrets (set with `npx wrangler secret put <NAME>`, never in this file):
+#   ANTHROPIC_API_KEY, ASSEMBLYAI_API_KEY, ELEVENLABS_API_KEY
+#   ACCESS_TOKEN (optional: require x-clicky-token on every request)

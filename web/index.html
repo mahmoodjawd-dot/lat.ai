@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clicky Home</title>
+  <meta name="description" content="Voice companions that see your screen and point at things.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 2 L22 10 L12.5 12.5 L10 22 Z' fill='%233b82f6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="shared/panel.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="layout">
+    <main class="main">
+      <header class="topbar">
+        <div class="brand">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 2 L22 10 L12.5 12.5 L10 22 Z" fill="#3b82f6" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <span>Clicky</span>
+        </div>
+        <button type="button" class="ghost-button" id="settings-button">Settings</button>
+      </header>
+
+      <section class="hero">
+        <h1>A Clicky for everything on your screen</h1>
+        <p>Pick a Clicky, share your screen, then hold <kbd>Space</kbd> or <kbd>ctrl</kbd>+<kbd>option</kbd> and ask. It answers out loud and its cursor flies to what you need.</p>
+      </section>
+
+      <section class="dock" aria-labelledby="dock-heading">
+        <h2 id="dock-heading">Home</h2>
+        <div class="dock-grid" id="dock-grid"></div>
+      </section>
+
+      <section class="stage" aria-labelledby="stage-heading">
+        <div class="stage-header">
+          <h2 id="stage-heading">Your screen</h2>
+          <button type="button" class="primary-button" id="share-button">Share screen</button>
+        </div>
+        <div class="screen-frame" id="screen-frame">
+          <video id="screen-preview" autoplay muted playsinline></video>
+          <div class="screen-placeholder" id="screen-placeholder">
+            <p><strong>Share a screen, window or tab</strong> so your Clickys can see what you see.</p>
+            <p>You can still talk without sharing; they just can't point.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="extension-info" aria-labelledby="extension-heading">
+        <h2 id="extension-heading">Get the Chrome extension</h2>
+        <p>The extension opens these same Clickys in Chrome's right-side panel and points at things directly on the page you're browsing, with no screen sharing needed.</p>
+        <ol>
+          <li>Download this project and run <code>npm run build:extension</code>.</li>
+          <li>Open <code>chrome://extensions</code>, turn on <strong>Developer mode</strong>, click <strong>Load unpacked</strong> and choose the <code>extension</code> folder.</li>
+          <li>Click the Clicky toolbar icon, open <strong>Settings</strong> in the panel and paste this site's address.</li>
+        </ol>
+      </section>
+    </main>
+
+    <aside class="side" aria-label="Clicky panel">
+      <div id="panel"></div>
+    </aside>
+  </div>
+
+  <dialog id="settings-dialog">
+    <form method="dialog" class="settings-form">
+      <h2>Settings</h2>
+      <label>
+        Access token
+        <input type="password" id="access-token-input" autocomplete="off" placeholder="Only if your Worker sets ACCESS_TOKEN">
+      </label>
+      <p class="settings-note">Saved in this browser only.</p>
+      <div class="settings-actions">
+        <button value="cancel" class="ghost-button">Cancel</button>
+        <button value="save" class="primary-button" id="settings-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

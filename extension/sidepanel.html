@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clicky</title>
+  <link rel="stylesheet" href="shared/panel.css">
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="panel-topbar">
+    <div class="brand">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 2 L22 10 L12.5 12.5 L10 22 Z" fill="#3b82f6" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>
+      <span>Clicky</span>
+    </div>
+    <button type="button" class="ghost-button" id="settings-toggle" aria-expanded="false" aria-controls="settings">Settings</button>
+  </header>
+
+  <form id="settings" class="settings" hidden>
+    <label>
+      Clicky site address
+      <input type="url" id="worker-url-input" placeholder="https://clicky-web.yourname.workers.dev" required>
+    </label>
+    <label>
+      Access token <span class="optional">(optional)</span>
+      <input type="password" id="access-token-input" autocomplete="off" placeholder="Only if your Worker sets ACCESS_TOKEN">
+    </label>
+    <div class="origin-box">
+      <div>Add this extension to your Worker's <code>ALLOWED_ORIGINS</code>:</div>
+      <div class="origin-row">
+        <code id="extension-origin"></code>
+        <button type="button" class="ghost-button" id="copy-origin">Copy</button>
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button type="submit" class="primary-button">Save</button>
+    </div>
+  </form>
+
+  <div class="page-status" id="page-status" hidden></div>
+
+  <div id="panel"></div>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

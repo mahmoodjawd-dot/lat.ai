@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clicky microphone</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 16px; background: #0b0d11; color: #eef0f4;
+      font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 420px; text-align: center; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p { color: #9097a3; margin: 0 0 18px; }
+    button { padding: 10px 18px; border: 0; border-radius: 10px; background: #3b82f6; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    button:hover { filter: brightness(1.1); }
+    #result { margin-top: 16px; color: #eef0f4; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Let Clicky hear you</h1>
+    <p>Chrome can't ask for the microphone from the side panel, so it asks here once. After you allow it, close this tab and hold to talk in the panel.</p>
+    <button type="button" id="allow-button">Allow microphone</button>
+    <div id="result" role="status"></div>
+  </main>
+  <script src="mic-permission.js"></script>
+</body>
+</html>

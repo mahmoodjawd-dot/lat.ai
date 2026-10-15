@@ -1,0 +1,12 @@
+{
+  "name": "lat-ai-clicky",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "npm --prefix worker install",
+    "dev": "npm --prefix worker run dev",
+    "deploy": "npm --prefix worker run deploy",
+    "typecheck": "npm --prefix worker run typecheck",
+    "build:extension": "node scripts/build-extension.mjs"
+  }
+}
