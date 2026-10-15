@@ -1,12 +1,12 @@
 /*
  * Cursor Agent SDK
  *
- * A second cursor, a small triangle like Clicky's, that trails your own on any
+ * A second cursor, a small yellow arrowhead like Clicky's, that trails your own on any
  * page that loads this script. Press ctrl + option (ctrl + alt on
  * Windows/Linux) and a speech bubble opens from it. Ask anything: the agent
  * works out where you are (site, page, section, what your pointer is on) and
  * what kind of help fits, then does it, narrating in the bubble as the
- * triangle flies around the page:
+ * arrowhead flies around the page:
  *   - do things: click, type, choose, scroll, navigate and run site actions
  *   - explain what's on the page, pointing at each part
  *   - troubleshoot errors and blocked forms, pointing at the fix
@@ -282,10 +282,19 @@
     const priceMentions = [];
     textLines.forEach((line, lineIndex) => {
       for (const priceMatch of line.matchAll(PRICE_PATTERN)) {
-        const lineWithoutPrice = line.replace(priceMatch[0], "").replace(/[\s:–—-]+$/, "").trim();
-        // A line that is only the price takes its label from the line above (a plan or product name).
-        const priceLabel = lineWithoutPrice.length >= 3 ? lineWithoutPrice : textLines[lineIndex - 1] ?? "";
-        priceMentions.push(`${collapseWhitespace(priceLabel, 50)}: ${priceMatch[0]}${lineWithoutPrice.length < 3 && lineWithoutPrice ? ` ${lineWithoutPrice}` : ""}`);
+        // "Team ($50/month per 5 seats)" → "Team (per 5 seats)", "Pro ($20/month)" → "Pro".
+        const lineWithoutPrice = line
+          .replace(priceMatch[0], "")
+          .replace(/\(\s*\)/g, "")
+          .replace(/\(\s+/g, "(")
+          .replace(/[\s:–—-]+$/, "")
+          .trim();
+        // A line that starts with the price ("$50 / month per 5 seats") takes its label from the
+        // line above (a plan or product name) and keeps the rest of the line as the price's terms.
+        const lineStartsWithPrice = priceMatch.index === 0 || lineWithoutPrice.length < 3;
+        const priceLabel = lineStartsWithPrice ? textLines[lineIndex - 1] ?? "" : lineWithoutPrice;
+        const priceTerms = lineStartsWithPrice && lineWithoutPrice ? ` ${lineWithoutPrice}` : "";
+        priceMentions.push(`${collapseWhitespace(priceLabel, 50)}: ${priceMatch[0]}${priceTerms}`);
         if (priceMentions.length >= 8) return;
       }
     });
@@ -894,7 +903,7 @@
       return conversationMessages.length > 0 && Date.now() - lastActivityAt < CONVERSATION_IDLE_RESET_MS;
     }
 
-    /** Opens the speech bubble as a text box at the triangle, ready to type. */
+    /** Opens the speech bubble as a text box at the arrowhead, ready to type. */
     function open() {
       if (currentAbortController) return; // busy: the bubble is narrating
       if (!hasRecentConversation() && !activePlan) conversationMessages = [];

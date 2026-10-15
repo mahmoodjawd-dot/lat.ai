@@ -174,6 +174,13 @@ async function handleAgentStep(request: Request, env: Env, corsHeaders: Record<s
     ? (env.AGENT_EFFORT as EffortLevel)
     : "low";
 
+  if (!env.ANTHROPIC_API_KEY) {
+    return jsonResponse(
+      { error: "The Worker has no ANTHROPIC_API_KEY. Add it as a secret (or in worker/.dev.vars for wrangler dev)." },
+      500,
+      corsHeaders,
+    );
+  }
   const anthropicClient = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
   try {
     const agentMessage = await anthropicClient.beta.messages.create({
