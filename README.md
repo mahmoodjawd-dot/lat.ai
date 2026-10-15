@@ -9,7 +9,7 @@ It works out where you are before it acts: the site, what kind of page it is, br
 | It can | For example |
 |---|---|
 | **Do things** | "find the latest blog post": it clicks, types, chooses options, navigates across pages and calls the site's own actions until it's done. |
-| **Explain** | "what am I looking at?": the triangle walks you through the page, pointing at each part. |
+| **Explain** | "what am I looking at?": the arrowhead walks you through the page, pointing at each part. |
 | **Troubleshoot** | "why won't this submit?": it reads on-screen errors, invalid fields, broken images and script errors, and points at the fix. |
 | **Pitch** | "why should my team pick this?": it's the product's honest guide, using context the site owner provides, and ends on the next step. |
 | **Guide you** | "help me create an account": a step plan with progress on the cursor ("2/5 · Add your work email"). It points at each step and checks in by itself every time you click, across pages. |
