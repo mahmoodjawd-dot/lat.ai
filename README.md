@@ -56,7 +56,17 @@ Other options: `color`, `label`, `showCursor` (`"always"` or `"active"`), `hotke
 - Page text is treated as data, never as instructions.
 - Navigation is limited to http and https addresses.
 
-## Setup
+## Setup without a terminal (all in the browser)
+
+1. In the [Cloudflare dashboard](https://dash.cloudflare.com), go to **Workers & Pages → Create → Import a repository**. Connect GitHub and pick this repo.
+2. Set **Project name** to `cursor-agent` (it must match `name` in `worker/wrangler.toml`), **Root directory** to `worker`, **Build command** to `npm install`, and **Deploy command** to `npx wrangler deploy`. Choose the branch that has this code.
+3. After the first deploy, open the Worker, go to **Settings → Variables and Secrets → Add**, choose type **Secret**, and name it `ANTHROPIC_API_KEY`. Paste your key as the value and click **Deploy**.
+4. Open the `*.workers.dev` address shown on the Worker's page.
+
+From then on, every commit to that branch redeploys automatically. That includes edits made on github.com, such as adding an origin to `ALLOWED_ORIGINS`.
+
+**Extension without a terminal:** on GitHub, click **Code → Download ZIP** and unzip it. Then load the `extension` folder as described below. It's ready to use as is.
+
 
 You need Node.js 20+, a free Cloudflare account, and an [Anthropic](https://console.anthropic.com) API key.
 
@@ -80,9 +90,7 @@ To embed it on another site, add that site's origin to `ALLOWED_ORIGINS` in `wor
 
 ### Chrome extension
 
-```bash
-npm run build:extension       # copies web/cursor-agent.js into extension/
-```
+If you change `web/cursor-agent.js`, run `npm run build:extension` to copy it into `extension/`. The copy is committed, so a fresh download already works.
 
 1. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and choose the `extension` folder.
 2. The options page opens. Paste your Worker address and copy the `chrome-extension://…` origin it shows.
