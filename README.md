@@ -1,6 +1,6 @@
 # lat.ai: Cursor Agent
 
-A second cursor, a small yellow arrowhead facing the same way as your pointer (like [Clicky](https://github.com/farzaa/clicky)'s companion), that trails your own on any web page, with an AI agent inside. Nothing else shows until you call it: press **ctrl + option** (ctrl + alt on Windows/Linux) and a speech bubble opens from it. Type what you want and press return. The arrowhead glides around the page doing it, narrating in the bubble, answers there, then the bubble fades away. Press **esc** to stop or close; click an answer to reply.
+A second cursor, a small mirrored-silver arrowhead facing the same way as your pointer (like [Clicky](https://github.com/farzaa/clicky)'s companion), that trails your own on any web page, with an AI agent inside. Nothing else shows until you call it: press **ctrl + option** (ctrl + alt on Windows/Linux) and a frosted-glass bubble opens from it. Type what you want and press return. The arrowhead glides around the page doing it, narrating in the bubble, answers there, then the bubble fades away. Press **esc** to stop or close; click an answer to reply.
 
 Every request also captures **what's on screen** (with the agent hidden), tags each clickable element with its number, and sends that picture to Claude with the page text. So it sees layout, images and charts as well as the structure, and can point at any spot in the picture.
 
@@ -14,7 +14,7 @@ It works out where you are before it acts: the site, what kind of page it is, br
 | **Pitch** | "why should my team pick this?": it's the product's honest guide, using context the site owner provides, and ends on the next step. |
 | **Guide you** | "help me create an account": a step plan with progress on the cursor ("2/5 · Add your work email"). It points at each step and checks in by itself every time you click, across pages. |
 
-![Asking: the bubble opens from the yellow arrowhead](docs/ask.png)
+![Asking: the glass bubble opens from the silver arrowhead](docs/ask.png)
 
 ![Working: the arrowhead glides to what it's looking at and narrates](docs/pointing.png)
 
@@ -45,7 +45,7 @@ It works out where you are before it acts: the site, what kind of page it is, br
 </script>
 ```
 
-Other options: `color` (the arrowhead and bubble; the text color adapts), `placeholder`, `screenCapture` (`"tab"` asks the visitor once per page to share the tab so the agent gets screenshots; default `"off"`), `showCursor` (`"always"` or `"active"`), `hotkey`, `maxSteps`. From code you can call `CursorAgent.open()`, `CursorAgent.ask("…")` (optionally forcing a mode: `"do"`, `"explain"`, `"troubleshoot"`, `"pitch"` or `"guide"`), `CursorAgent.registerAction({...})` and `CursorAgent.setSiteContext("…")`.
+Other options: `color` (accent for focus rings), `placeholder`, `screenCapture` (`"tab"` asks the visitor once per page to share the tab so the agent gets screenshots; default `"off"`), `showCursor` (`"always"` or `"active"`), `hotkey`, `maxSteps`. From code you can call `CursorAgent.open()`, `CursorAgent.ask("…")` (optionally forcing a mode: `"do"`, `"explain"`, `"troubleshoot"`, `"pitch"` or `"guide"`), `CursorAgent.registerAction({...})` and `CursorAgent.setSiteContext("…")`.
 
 ## How it works
 
@@ -135,7 +135,7 @@ Run `npm --prefix worker run tail` to watch the Worker's logs live.
 
 ```
 web/
-  cursor-agent.js   the SDK: arrowhead cursor, speech bubble, page snapshot, screenshots, tools, agent loop (no dependencies)
+  cursor-agent.js   the SDK: silver arrowhead cursor, glass speech bubble, page snapshot, screenshots, tools, agent loop (no dependencies)
   index.html, blog.html, blog/, signup.html, demo.css, demo.js   the Acme Cloud demo site
 worker/             Cloudflare Worker: serves web/ and runs agent steps (POST /api/agent)
   src/index.ts      route, access control, site-action validation, Claude call

@@ -44,7 +44,7 @@
     actions: [], // site actions: { name, description, parameters (JSON Schema), run(params) }
     hotkey: true, // ctrl + option toggles the card
     showCursor: "always", // "always": trail the pointer everywhere; "active": only while the agent is busy or a guide runs
-    color: "#ffd60a", // the arrowhead and speech bubble; text color adapts to it
+    color: "#e6e9ee", // accent for focus rings and highlights (the arrowhead is mirrored silver, the bubble is glass)
     placeholder: "Ask me anything about this page",
     // Screenshots give the agent eyes. "tab" asks the visitor once per page to share this tab;
     // the extension passes captureVisibleTab instead, which needs no prompt.
@@ -430,85 +430,97 @@
   const TRAIL_OFFSET_X = 20;
   const TRAIL_OFFSET_Y = 22;
 
-  /** Dark or light text, whichever reads better on the agent's color. */
-  function pickInkColor(backgroundColor) {
-    const probeElement = document.createElement("div");
-    probeElement.style.color = backgroundColor;
-    document.documentElement.appendChild(probeElement);
-    const [red, green, blue] = getComputedStyle(probeElement).color.match(/\d+/g).map(Number);
-    probeElement.remove();
-    const toLinear = (channel) => ((channel /= 255) <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
-    const luminance = 0.2126 * toLinear(red) + 0.7152 * toLinear(green) + 0.0722 * toLinear(blue);
-    return luminance > 0.4 ? "#1c1917" : "#ffffff";
-  }
-
   const UI_STYLES = `
     :host { all: initial; }
     .layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483647;
-      font: 600 14.5px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
-      letter-spacing: -0.005em; -webkit-font-smoothing: antialiased; }
+      --glass-fill: linear-gradient(180deg, rgba(44, 44, 50, 0.66) 0%, rgba(20, 20, 24, 0.74) 100%);
+      --glass-rim: rgba(255, 255, 255, 0.14);
+      --glass-highlight: rgba(255, 255, 255, 0.32);
+      --text-strong: rgba(255, 255, 255, 0.96);
+      --text-soft: rgba(255, 255, 255, 0.58);
+      font: 500 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+      letter-spacing: -0.01em; -webkit-font-smoothing: antialiased; color: var(--text-strong); }
     .layer.capturing { visibility: hidden; }
     [hidden] { display: none !important; }
 
-    .agent { position: absolute; left: 0; top: 0; will-change: transform; opacity: 0; transition: opacity 240ms ease; }
+    /* ---- the mirrored silver arrowhead ---- */
+    .agent { position: absolute; left: 0; top: 0; will-change: transform; opacity: 0; transition: opacity 260ms ease; }
     .agent.visible { opacity: 1; }
-    .arrowhead { position: absolute; left: -1px; top: -1px; overflow: visible; transition: transform 160ms ease;
-      filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)) drop-shadow(0 3px 8px rgba(0,0,0,.18)); }
-    .agent.flying .arrowhead { transform: scale(1.08); }
-    .agent.working .arrowhead { animation: breathe 1.6s ease-in-out infinite; }
+    .arrowhead { position: absolute; left: -2.3px; top: -2.3px; overflow: visible; transition: transform 200ms cubic-bezier(.2,.8,.2,1);
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)) drop-shadow(0 4px 10px rgba(0,0,0,.28)); }
+    .agent.flying .arrowhead { transform: scale(1.1); }
+    .agent.working .arrowhead { animation: breathe 1.8s ease-in-out infinite; }
     @keyframes breathe { 50% { transform: scale(1.12); } }
-    .ring { position: absolute; left: -15px; top: -15px; width: 30px; height: 30px; border-radius: 50%;
-      border: 2px solid var(--agent-color); opacity: 0; }
-    .agent.clicking .ring { animation: ring 600ms cubic-bezier(.2,.7,.3,1); }
-    @keyframes ring { from { transform: scale(.25); opacity: 1; } to { transform: scale(1.9); opacity: 0; } }
+    .ring { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,.9); box-shadow: 0 0 12px rgba(255,255,255,.6), inset 0 0 8px rgba(255,255,255,.4); opacity: 0; }
+    .agent.clicking .ring { animation: ring 650ms cubic-bezier(.2,.7,.3,1); }
+    @keyframes ring { from { transform: scale(.25); opacity: 1; } to { transform: scale(2); opacity: 0; } }
 
-    .stack { position: absolute; left: 12px; top: 26px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    /* ---- frosted glass surfaces ---- */
+    .stack { position: absolute; left: 14px; top: 28px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
     .agent.flip-x .stack { left: auto; right: -8px; align-items: flex-end; }
-    .agent.flip-y .stack { top: auto; bottom: 10px; flex-direction: column-reverse; }
+    .agent.flip-y .stack { top: auto; bottom: 12px; flex-direction: column-reverse; }
 
-    .bubble { pointer-events: auto; box-sizing: border-box; width: max-content; min-width: 132px; max-width: min(360px, calc(100vw - 32px));
-      padding: 9px 13px 10px; border-radius: 4px 14px 14px 14px; color: var(--agent-ink);
-      background: var(--agent-color);
-      box-shadow: 0 1px 0 rgba(255,255,255,.35) inset, 0 0 0 0.5px rgba(0,0,0,.18), 0 10px 30px -6px rgba(0,0,0,.28), 0 3px 8px rgba(0,0,0,.10);
-      transform-origin: 0 0; animation: bubble-in 220ms cubic-bezier(.2,.9,.3,1.2); }
-    .agent.flip-x .bubble { border-radius: 14px 4px 14px 14px; transform-origin: 100% 0; }
-    .agent.flip-y .bubble { border-radius: 14px 14px 14px 4px; transform-origin: 0 100%; }
+    .glass { position: relative; isolation: isolate; color: var(--text-strong);
+      background: var(--glass-fill);
+      /* A moderate radius: some renderers (software/headless Chrome) weaken very large backdrop blurs. */
+      -webkit-backdrop-filter: blur(12px) saturate(160%); backdrop-filter: blur(12px) saturate(160%);
+      box-shadow:
+        inset 0 1px 0 var(--glass-highlight),
+        inset 0 0 0 1px var(--glass-rim),
+        inset 0 -1px 0 rgba(255,255,255,.04),
+        0 18px 40px -12px rgba(0,0,0,.45),
+        0 4px 12px rgba(0,0,0,.18); }
+    /* A soft specular sheen across the top-left, like light on glass. */
+    .glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1;
+      background: linear-gradient(135deg, rgba(255,255,255,.16) 0%, rgba(255,255,255,.04) 32%, rgba(255,255,255,0) 55%); }
+
+    .bubble { pointer-events: auto; box-sizing: border-box; width: max-content; min-width: 150px; max-width: min(380px, calc(100vw - 32px));
+      padding: 11px 15px 12px; border-radius: 18px; transform-origin: 0 0; animation: bubble-in 260ms cubic-bezier(.2,.9,.25,1.15); }
+    .agent.flip-x .bubble { transform-origin: 100% 0; }
+    .agent.flip-y .bubble { transform-origin: 0 100%; }
     .bubble.leaving { animation: bubble-out 220ms ease forwards; }
-    @keyframes bubble-in { from { opacity: 0; transform: scale(.86) translateY(-3px); } to { opacity: 1; transform: none; } }
-    @keyframes bubble-out { to { opacity: 0; transform: scale(.94); } }
-    .bubble.error { background: #3b0d0c; color: #fff; }
-    .bubble-actions { display: flex; gap: 6px; margin-top: 9px; }
-    .bubble-button { padding: 5px 12px; border: 0; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer;
-      background: rgba(0,0,0,.08); color: inherit; }
-    .bubble-button.primary { background: var(--agent-ink); color: var(--agent-color); }
-    .bubble-button:hover { filter: brightness(1.08); }
+    @keyframes bubble-in { from { opacity: 0; transform: scale(.9) translateY(-4px); filter: blur(4px); } to { opacity: 1; transform: none; filter: none; } }
+    @keyframes bubble-out { to { opacity: 0; transform: scale(.96); filter: blur(3px); } }
+    .bubble.error { --glass-fill: linear-gradient(180deg, rgba(92, 22, 28, 0.7), rgba(52, 12, 16, 0.78)); --glass-rim: rgba(255, 120, 120, 0.25); }
     .bubble.answer { cursor: pointer; }
-    .bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
-    .bubble.working .bubble-text { display: flex; align-items: center; gap: 8px; }
-    .bubble.working .bubble-text::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%;
-      background: currentColor; opacity: .55; animation: pulse 1s ease-in-out infinite; }
-    @keyframes pulse { 50% { opacity: .15; transform: scale(.7); } }
-    .bubble-input { display: block; width: 290px; max-width: 100%; margin: 0; padding: 0; border: 0; outline: none; background: transparent;
-      color: inherit; font: inherit; caret-color: currentColor; }
-    .bubble-input::placeholder { color: inherit; opacity: .5; }
-    .bubble-hint { margin-top: 5px; font-size: 11px; font-weight: 500; opacity: .55; letter-spacing: 0; }
+    .bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; text-shadow: 0 1px 1px rgba(0,0,0,.25); }
+    .bubble.working .bubble-text { display: flex; align-items: center; gap: 9px; color: var(--text-strong); }
+    .bubble.working .bubble-text::before { content: ""; flex: none; width: 14px; height: 14px; border-radius: 50%;
+      background: conic-gradient(from 0deg, rgba(255,255,255,.95), rgba(255,255,255,.08) 70%, rgba(255,255,255,.95));
+      -webkit-mask: radial-gradient(circle, transparent 4.5px, #000 5px); mask: radial-gradient(circle, transparent 4.5px, #000 5px);
+      animation: spin 0.9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .bubble-input { display: block; width: 300px; max-width: 100%; margin: 0; padding: 1px 0; border: 0; outline: none; background: transparent;
+      color: var(--text-strong); font: inherit; font-size: 15px; caret-color: #fff; }
+    .bubble-input::placeholder { color: var(--text-soft); }
+    .bubble-hint { margin-top: 7px; font-size: 11px; color: var(--text-soft); letter-spacing: 0; }
+    .bubble-hint kbd { font: inherit; padding: 0 5px; border-radius: 5px; background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 0.5px rgba(255,255,255,.18); }
+    .bubble-actions { display: flex; gap: 7px; margin-top: 11px; }
+    .bubble-button { padding: 6px 13px; border: 0; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+      color: var(--text-strong); background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 0.5px rgba(255,255,255,.22), inset 0 1px 0 rgba(255,255,255,.15);
+      transition: background 140ms, transform 140ms; }
+    .bubble-button:hover { background: rgba(255,255,255,.18); }
+    .bubble-button:active { transform: scale(.97); }
+    .bubble-button.primary { color: #111; background: linear-gradient(180deg, #ffffff, #dfe3e8); box-shadow: 0 1px 2px rgba(0,0,0,.25), inset 0 1px 0 #fff; }
+    .bubble-button.primary:hover { background: linear-gradient(180deg, #ffffff, #eef0f3); }
 
-    .label, .plan-chip { pointer-events: none; color: #fff; background: rgba(24, 22, 20, .9);
-      box-shadow: 0 0 0 0.5px rgba(255,255,255,.08) inset, 0 4px 14px rgba(0,0,0,.25);
-      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-    .label { padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 650; animation: bubble-in 180ms ease-out; }
-    .label::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%;
-      background: var(--agent-color); transform: translateY(-1px); }
-    .plan-chip { pointer-events: auto; display: flex; align-items: center; gap: 8px; max-width: 320px; padding: 4px 5px 4px 10px;
-      border-radius: 999px; font-size: 12.5px; font-weight: 600; }
-    .plan-count { flex: none; color: var(--agent-color); font-variant-numeric: tabular-nums; }
-    .plan-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .plan-end { flex: none; width: 20px; height: 20px; border: 0; border-radius: 50%; background: rgba(255,255,255,.1); color: #fff;
-      font: 600 13px/1 system-ui, sans-serif; cursor: pointer; }
-    .plan-end:hover { background: rgba(255,255,255,.22); }
-    button:focus-visible { outline: 2px solid var(--agent-color); outline-offset: 2px; }
+    .label { pointer-events: none; padding: 4px 10px 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+      display: inline-flex; align-items: center; gap: 6px; animation: bubble-in 200ms ease-out; }
+    .label::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.9); }
+    .plan-chip { pointer-events: auto; display: flex; align-items: center; gap: 9px; max-width: 330px; padding: 5px 5px 5px 11px;
+      border-radius: 999px; font-size: 12.5px; font-weight: 500; }
+    .plan-count { flex: none; font-weight: 700; font-variant-numeric: tabular-nums;
+      background: linear-gradient(180deg, #ffffff, #b9bfc8); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .plan-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-strong); }
+    .plan-end { flex: none; width: 21px; height: 21px; border: 0; border-radius: 50%; color: var(--text-strong); cursor: pointer;
+      background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 0.5px rgba(255,255,255,.2); font: 600 13px/1 system-ui, sans-serif; }
+    .plan-end:hover { background: rgba(255,255,255,.2); }
+    button:focus-visible { outline: 2px solid rgba(255,255,255,.85); outline-offset: 2px; }
 
-    @media (prefers-reduced-motion: reduce) { .bubble, .label, .agent.working .arrowhead { animation: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .bubble, .label, .agent.working .arrowhead, .bubble.working .bubble-text::before, .sheen { animation: none; }
+    }
   `;
 
   function createAgentInterface({ color, onSubmit, onDismiss, onEndGuide, onAnswerClick }) {
@@ -519,13 +531,36 @@
       <div class="layer">
         <div class="agent">
           <div class="ring"></div>
-          <svg class="arrowhead" width="22" height="22" viewBox="-1 -1 22 22" aria-hidden="true">
-            <path d="M0.6 0.6 L18.4 7.3 Q19.5 7.8 18.4 8.3 L10.3 10.3 L8.3 18.4 Q7.8 19.5 7.3 18.4 Z"
-              fill="var(--agent-color)" stroke="rgba(0,0,0,.55)" stroke-width="1" stroke-linejoin="round"/>
+          <svg class="arrowhead" width="30" height="30" viewBox="-2 -2 26 26" aria-hidden="true">
+            <defs>
+              <!-- Mirrored silver: hard bands of light and dark, like a polished chrome surface. -->
+              <linearGradient id="ca-chrome" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#ffffff"/>
+                <stop offset="0.2" stop-color="#e9ecf0"/>
+                <stop offset="0.38" stop-color="#7c838e"/>
+                <stop offset="0.47" stop-color="#5f6670"/>
+                <stop offset="0.55" stop-color="#f4f6f8"/>
+                <stop offset="0.72" stop-color="#c3c8cf"/>
+                <stop offset="1" stop-color="#6b727c"/>
+              </linearGradient>
+              <!-- A narrow specular band that glides across now and then. -->
+              <linearGradient id="ca-sheen" x1="0" y1="0" x2="1" y2="0" gradientUnits="objectBoundingBox">
+                <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+                <stop offset="0.5" stop-color="#fff" stop-opacity="0.85"/>
+                <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+                <animateTransform class="sheen" attributeName="gradientTransform" type="translate" values="-1.2 0; 1.2 0; 1.2 0" keyTimes="0; 0.35; 1" dur="4.5s" repeatCount="indefinite"/>
+              </linearGradient>
+              <clipPath id="ca-shape"><path d="M0.6 0.6 L19.4 7.6 Q20.6 8.1 19.4 8.6 L11 10.9 L8.6 19.4 Q8.1 20.6 7.6 19.4 Z"/></clipPath>
+            </defs>
+            <path d="M0.6 0.6 L19.4 7.6 Q20.6 8.1 19.4 8.6 L11 10.9 L8.6 19.4 Q8.1 20.6 7.6 19.4 Z" fill="url(#ca-chrome)"/>
+            <rect x="-4" y="-4" width="28" height="28" fill="url(#ca-sheen)" clip-path="url(#ca-shape)" transform="rotate(35 10 10)" opacity="0.9"/>
+            <!-- Bright inner rim on the lit edges, dark outline for contrast on any page. -->
+            <path d="M1.8 1.8 L17.6 7.9 M1.8 1.8 L7.9 17.6" stroke="rgba(255,255,255,.95)" stroke-width="0.9" stroke-linecap="round" fill="none"/>
+            <path d="M0.6 0.6 L19.4 7.6 Q20.6 8.1 19.4 8.6 L11 10.9 L8.6 19.4 Q8.1 20.6 7.6 19.4 Z" fill="none" stroke="rgba(12,14,18,.72)" stroke-width="0.8" stroke-linejoin="round"/>
           </svg>
           <div class="stack">
-            <div class="label" hidden></div>
-            <form class="bubble" hidden aria-live="polite">
+            <div class="label glass" hidden></div>
+            <form class="bubble glass" hidden aria-live="polite">
               <div class="bubble-text"></div>
               <input class="bubble-input" type="text" autocomplete="off" aria-label="Ask Cursor Agent" hidden>
               <div class="bubble-actions" hidden>
@@ -534,7 +569,7 @@
               </div>
               <div class="bubble-hint" hidden></div>
             </form>
-            <div class="plan-chip" hidden>
+            <div class="plan-chip glass" hidden>
               <span class="plan-count"></span><span class="plan-text"></span>
               <button type="button" class="plan-end" aria-label="End guide" title="End guide">×</button>
             </div>
@@ -555,7 +590,6 @@
     const planCountElement = select(".plan-count");
     const planTextElement = select(".plan-text");
     layerElement.style.setProperty("--agent-color", color);
-    layerElement.style.setProperty("--agent-ink", pickInkColor(color));
     document.documentElement.appendChild(hostElement);
 
     const agentPosition = { x: innerWidth / 2, y: innerHeight / 2 };
@@ -586,7 +620,7 @@
         return;
       }
       bubbleElement.hidden = false;
-      bubbleElement.className = `bubble ${state}`;
+      bubbleElement.className = `bubble glass ${state}`;
       const isInput = state === "input";
       bubbleActionsElement.hidden = state !== "confirm";
       bubbleInputElement.hidden = !isInput;
@@ -647,7 +681,7 @@
       /** Asks the user to approve one action; resolves true for "Go ahead", false for Cancel or Esc. */
       askConfirmation(questionText) {
         pendingConfirmation?.(false);
-        setBubble("confirm", questionText, { hint: "return to go ahead · esc to cancel" });
+        setBubble("confirm", questionText, { hint: "↩ go ahead · esc cancel" });
         bubbleElement.querySelector('[data-answer="yes"]').focus({ preventScroll: true });
         return new Promise((resolve) => {
           pendingConfirmation = (approved) => {
@@ -660,7 +694,7 @@
         pendingConfirmation?.(false);
       },
       showError(errorText) {
-        setBubble("error", errorText, { hint: "Click to try again · esc to close" });
+        setBubble("error", errorText, { hint: "click to try again · esc close" });
       },
       hideBubble() {
         setBubble("hidden");
@@ -962,7 +996,7 @@
       if (currentAbortController) return; // busy: the bubble is narrating
       if (!hasRecentConversation() && !activePlan) conversationMessages = [];
       const isFollowUp = conversationMessages.length > 0;
-      agentInterface.showInput(isFollowUp ? "Reply, or ask something new" : options.placeholder, "return to send · esc to close");
+      agentInterface.showInput(isFollowUp ? "Reply, or ask something new" : options.placeholder, "↩ send · esc close");
     }
 
     /** Esc / hotkey: stops a running task, or closes the bubble. A running guide keeps going from the cursor. */
