@@ -16,7 +16,8 @@ AGENT_EFFORT = "low"
 # Comma-separated extra origins allowed to call /api/agent from a browser:
 # sites that embed the SDK ("https://www.example.com") and the extension
 # ("chrome-extension://<id>", shown in the extension's options page).
-ALLOWED_ORIGINS = "chrome-extension://demcokifljpiejahdcgflfpidfkjdnhp"
+# Each unpacked copy of the extension gets its own id, so add yours here.
+ALLOWED_ORIGINS = ""
 
 # Secrets (set with `npx wrangler secret put <NAME>`, never in this file):
 #   ANTHROPIC_API_KEY (required)

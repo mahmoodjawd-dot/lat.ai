@@ -74,6 +74,9 @@
   const MAX_SCREENSHOT_WIDTH = 1280;
   const SCREENSHOT_JPEG_QUALITY = 0.62;
   const MAX_SCREENSHOT_TAGS = 120;
+  // Older screenshots are swapped for a note so long tasks stay within request and storage limits.
+  const SCREENSHOTS_TO_KEEP = 2;
+  const SCREEN_SHARE_ANSWER_TIMEOUT_MS = 15000;
   // TypeSafe judgment thresholds (see worker/src/judgments.ts). Starting points to tune on real traffic.
   const CONSEQUENTIAL_ACTION_THRESHOLD = 0.5;
   const EXPLICIT_REQUEST_THRESHOLD = 0.85;
@@ -1144,7 +1147,11 @@
       if (tabShareStream || !tabSharePromise) return tabShareStream;
       if (tabShareDecisionAwaited) return null; // still unanswered or declined: carry on without a picture
       tabShareDecisionAwaited = true;
-      return Promise.race([tabSharePromise, wait(15000).then(() => null)]);
+      // The browser's share prompt is open now; say what it's for instead of sitting on "Looking at the page".
+      narrate("Share this tab so I can see the page");
+      const stream = await Promise.race([tabSharePromise, wait(SCREEN_SHARE_ANSWER_TIMEOUT_MS).then(() => null)]);
+      narrate("Looking at the page");
+      return stream;
     }
 
     async function grabScreenImage(stream) {
@@ -1198,6 +1205,11 @@
     }
 
     function buildScreenshotBlocks(screenshot) {
+      if (!screenshot && options.screenCapture === "tab" && !options.captureVisibleTab) {
+        // Browsers only let a page ask to share the tab during a click or key press, so a task
+        // that carried on onto a new page has no picture until the user asks something here.
+        return [{ type: "text", text: "(No screenshot of this page: the user hasn't shared this tab here. Work from the snapshot text.)" }];
+      }
       if (!screenshot) return [];
       return [
         { type: "image", source: { type: "base64", media_type: "image/jpeg", data: screenshot.base64 } },
@@ -1206,6 +1218,27 @@
           text: `(Screenshot of what the user sees right now, ${screenshot.width}x${screenshot.height} pixels, with the agent hidden. Yellow tags show the element ids from the snapshot.)`,
         },
       ];
+    }
+
+    /** Keeps only the latest screenshots in the conversation; each one is 100-250 KB. */
+    function dropOlderScreenshots() {
+      const imageLocations = [];
+      for (const message of conversationMessages) {
+        if (!Array.isArray(message.content)) continue;
+        message.content.forEach((contentBlock, blockIndex) => {
+          if (contentBlock.type === "image") imageLocations.push([message.content, blockIndex]);
+          if (contentBlock.type === "tool_result" && Array.isArray(contentBlock.content)) {
+            contentBlock.content.forEach((resultBlock, resultIndex) => {
+              if (resultBlock.type === "image") imageLocations.push([contentBlock.content, resultIndex]);
+            });
+          }
+        });
+      }
+      // Back to front, so removing a caption doesn't shift the positions still to visit.
+      for (const [blocks, blockIndex] of imageLocations.slice(0, -SCREENSHOTS_TO_KEEP).reverse()) {
+        const hasCaption = blocks[blockIndex + 1]?.text?.startsWith("(Screenshot of what the user sees");
+        blocks.splice(blockIndex, hasCaption ? 2 : 1, { type: "text", text: "(Older screenshot removed to save space.)" });
+      }
     }
 
     // ---------- fast judgments (TypeSafe, optional) ----------
@@ -1450,6 +1483,7 @@
       try {
         while (currentStepCount < options.maxSteps) {
           currentStepCount++;
+          dropOlderScreenshots();
           const agentStep = await transport.requestAgentStep(
             { messages: conversationMessages, siteActions: getSiteActionDefinitions() },
             abortSignal,

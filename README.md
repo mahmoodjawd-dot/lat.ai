@@ -99,7 +99,7 @@ npx wrangler deploy
 
 To embed it on another site, add that site's origin to `ALLOWED_ORIGINS` in `worker/wrangler.toml` and redeploy.
 
-**Optional: require a password.** Run `npx wrangler secret put ACCESS_TOKEN` and pass the same value as `accessToken` (or enter it in the extension's options). Without it, anyone on an allowed origin can use your API credits.
+**Recommended: require a password.** Run `npx wrangler secret put ACCESS_TOKEN` and pass the same value as `accessToken` (or enter it in the extension's options). The origin check only stops other websites in a browser; without a token, anyone who calls the Worker directly (curl, a script) can use your API credits. On a public website the token sits in the page's source, so it mainly protects private setups and the extension.
 
 ### Chrome extension
 
