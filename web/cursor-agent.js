@@ -1,7 +1,7 @@
 /*
  * Cursor Agent SDK
  *
- * A second cursor, a small yellow arrowhead like Clicky's, that trails your own on any
+ * A second cursor, a small mirrored-silver arrowhead like Clicky's, that trails your own on any
  * page that loads this script. Press ctrl + option (ctrl + alt on
  * Windows/Linux) and a speech bubble opens from it. Ask anything: the agent
  * works out where you are (site, page, section, what your pointer is on) and
