@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign up · Acme Cloud</title>
+  <meta name="description" content="Create your Acme Cloud account.">
+  <link rel="stylesheet" href="demo.css">
+</head>
+<body>
+  <div class="agent-hint">Demo site for Cursor Agent. Press <kbd>ctrl</kbd> + <kbd>option</kbd> anywhere and ask the silver cursor anything. <button type="button" data-open-agent>Open it</button></div>
+  <header class="site-header">
+    <a class="logo" href="index.html">Acme Cloud</a>
+    <nav class="site-nav" aria-label="Main"><a href="index.html">Home</a><a href="blog.html">Blog</a><a href="index.html#pricing">Pricing</a><a href="signup.html" aria-current="page">Sign up</a></nav>
+  </header>
+  <main>
+    <h1>Create your account</h1>
+    <p class="lead">Free to start. Paid plans include a 14-day trial with no card needed.</p>
+    <form class="signup" novalidate>
+      <div class="form-error" role="alert" hidden></div>
+      <label>Full name <input name="name" autocomplete="name" required></label>
+      <label>Work email <input name="email" type="email" autocomplete="email" required></label>
+      <label>Password <input name="password" type="password" autocomplete="new-password" required minlength="8"></label>
+      <label>Plan
+        <select name="plan"><option value="free">Free</option><option value="pro">Pro ($20/month)</option><option value="team">Team ($50/month per 5 seats)</option></select>
+      </label>
+      <label class="checkbox-row"><input type="checkbox" name="terms"> I agree to the terms of service</label>
+      <button class="button primary" type="submit">Create account</button>
+    </form>
+    <div class="form-success" hidden>
+      <strong>Account created.</strong> Next, <a href="index.html">connect a GitHub repository</a> to deploy your first project.
+    </div>
+    <img src="images/signup-illustration.png" alt="" width="1" height="1">
+    <script>
+      // Demo sign-up: validates on submit and shows the first problem, so
+      // Troubleshoot and Guide me have something real to work with.
+      const signupForm = document.querySelector("form.signup");
+      const formErrorElement = signupForm.querySelector(".form-error");
+      const requestedPlan = new URLSearchParams(location.search).get("plan");
+      if (requestedPlan) signupForm.plan.value = requestedPlan;
+      signupForm.addEventListener("submit", (submitEvent) => {
+        submitEvent.preventDefault();
+        const problems = [];
+        if (!signupForm.name.value.trim()) problems.push("Enter your full name.");
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(signupForm.email.value)) problems.push("Enter a valid work email.");
+        if (signupForm.password.value.length < 8) problems.push("Choose a password of at least 8 characters.");
+        if (!signupForm.terms.checked) problems.push("You need to agree to the terms of service.");
+        formErrorElement.hidden = problems.length === 0;
+        formErrorElement.textContent = problems.join(" ");
+        if (problems.length === 0) {
+          signupForm.hidden = true;
+          document.querySelector(".form-success").hidden = false;
+        }
+      });
+    </script>
+
+  </main>
+  <footer>Acme Cloud is a made-up company for this demo.</footer>
+  <script src="cursor-agent.js"></script>
+  <script src="demo.js"></script>
+</body>
+</html>

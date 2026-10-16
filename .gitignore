@@ -1,0 +1,5 @@
+node_modules/
+.dev.vars
+.wrangler/
+# Local clone of the original macOS app, for reference only
+clicky/

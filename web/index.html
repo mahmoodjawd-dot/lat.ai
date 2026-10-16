@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acme Cloud: deploy web apps from GitHub</title>
+  <meta name="description" content="Acme Cloud builds and deploys your web apps from GitHub automatically.">
+  <link rel="stylesheet" href="demo.css">
+</head>
+<body>
+  <div class="agent-hint">Demo site for Cursor Agent. Press <kbd>ctrl</kbd> + <kbd>option</kbd> anywhere and ask the silver cursor anything. <button type="button" data-open-agent>Open it</button></div>
+  <header class="site-header">
+    <a class="logo" href="index.html">Acme Cloud</a>
+    <nav class="site-nav" aria-label="Main"><a href="index.html" aria-current="page">Home</a><a href="blog.html">Blog</a><a href="index.html#pricing">Pricing</a><a href="signup.html">Sign up</a></nav>
+  </header>
+  <main>
+    <h1>Ship web apps straight from GitHub</h1>
+    <p class="lead">Push your code and Acme Cloud builds, deploys and scales it, with a preview link for every pull request.</p>
+    <p><a class="button primary" href="signup.html">Start free</a> <a class="button" href="#book-demo">Book a demo</a></p>
+
+    <h2>Why teams switch</h2>
+    <div class="grid">
+      <div class="card"><h3>Deploys on every push</h3><p>Connect a repository once; every commit to main goes live in under a minute.</p></div>
+      <div class="card"><h3>Preview links</h3><p>Each pull request gets its own URL so reviewers can click through changes.</p></div>
+      <div class="card"><h3>Scales for you</h3><p>Traffic spikes are handled automatically, with no servers to manage.</p></div>
+    </div>
+
+    <h2 id="pricing">Pricing</h2>
+    <div class="grid">
+      <div class="card"><h3>Free</h3><div class="price">$0</div><ul><li>1 project</li><li>Community support</li></ul><a class="button" href="signup.html?plan=free">Start free</a></div>
+      <div class="card featured"><h3>Pro</h3><div class="price">$20 <small>/ month</small></div><ul><li>Unlimited projects</li><li>Custom domains</li><li>Email support</li></ul><a class="button primary" href="signup.html?plan=pro">Start 14-day trial</a></div>
+      <div class="card"><h3>Team</h3><div class="price">$50 <small>/ month per 5 seats</small></div><ul><li>Everything in Pro</li><li>SSO and audit logs</li><li>99.9% uptime SLA</li></ul><a class="button" href="signup.html?plan=team">Start 14-day trial</a></div>
+    </div>
+
+    <h2>What customers say</h2>
+    <div class="grid">
+      <blockquote>"We cut our release time from a day to ten minutes." <br>— Priya, Northwind</blockquote>
+      <blockquote>"Preview links changed how we review design work." <br>— Sam, Lumen Labs</blockquote>
+    </div>
+
+    <h2 id="book-demo">Book a demo</h2>
+    <p>Tell us about your team and we'll set up a walkthrough. <button type="button" class="button" onclick="alert('Ask Cursor Agent to book it for you!')">Request a demo</button></p>
+
+  </main>
+  <footer>Acme Cloud is a made-up company for this demo.</footer>
+  <script src="cursor-agent.js"></script>
+  <script src="demo.js"></script>
+</body>
+</html>

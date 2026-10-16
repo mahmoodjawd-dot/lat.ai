@@ -1,0 +1,29 @@
+name = "lat-ai"
+main = "worker/src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# web/ holds the SDK (cursor-agent.js) and a small demo site, served as
+# static files from the same Worker as /api/agent.
+[assets]
+directory = "web"
+
+# Lets Cloudflare's builds run `wrangler preview` for pull requests and other
+# non-production branches. Empty: previews use the settings above.
+[previews]
+
+[vars]
+# Claude model for the agent.
+CLAUDE_MODEL = "claude-opus-5-5"
+# How hard the agent thinks per step: low (fastest), medium, high, xhigh, max.
+AGENT_EFFORT = "low"
+# Comma-separated extra origins allowed to call /api/agent from a browser:
+# sites that embed the SDK ("https://www.example.com") and the extension
+# ("chrome-extension://<id>", shown in the extension's options page).
+# Each unpacked copy of the extension gets its own id, so add yours here.
+ALLOWED_ORIGINS = ""
+
+# Secrets (set with `npx wrangler secret put <NAME>`, never in this file):
+#   ANTHROPIC_API_KEY (required)
+#   ACCESS_TOKEN      (optional: require x-cursor-agent-token on every request)
+#   TYPESAFE_API_KEY  (optional: fast safety checks before risky actions, cheaper guide check-ins)

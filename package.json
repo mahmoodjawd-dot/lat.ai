@@ -1,0 +1,14 @@
+{
+  "name": "lat-ai-cursor-agent",
+  "private": true,
+  "type": "module",
+  "workspaces": ["worker"],
+  "scripts": {
+    "setup": "npm install",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "npm --workspace worker run typecheck",
+    "tail": "wrangler tail",
+    "build:extension": "node scripts/build-extension.mjs"
+  }
+}
