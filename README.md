@@ -70,7 +70,7 @@ Without the key, both fall back to Claude-only behavior. The thresholds are in `
 ## Setup without a terminal (all in the browser)
 
 1. In the [Cloudflare dashboard](https://dash.cloudflare.com), go to **Workers & Pages → Create → Import a repository**. Connect GitHub and pick this repo.
-2. Set **Project name** to `cursor-agent` (it must match `name` in `worker/wrangler.toml`), **Root directory** to `worker`, **Build command** to `npm install`, and **Deploy command** to `npx wrangler deploy`. Choose the branch that has this code.
+2. Set **Project name** to `lat-ai` (it must match `name` in `worker/wrangler.toml`), **Root directory** to `worker`, **Build command** to `npm install`, and **Deploy command** to `npx wrangler deploy`. Choose the branch that has this code.
 3. After the first deploy, open the Worker, go to **Settings → Variables and Secrets → Add**, choose type **Secret**, and name it `ANTHROPIC_API_KEY`. Paste your key as the value and click **Deploy**.
 4. Open the `*.workers.dev` address shown on the Worker's page.
 
@@ -91,7 +91,7 @@ npx wrangler secret put ANTHROPIC_API_KEY
 npx wrangler deploy
 ```
 
-`deploy` prints an address such as `https://cursor-agent.yourname.workers.dev`. Open it to try the demo site (Acme Cloud, a made-up company with a blog, pricing and a sign-up form). Press **ctrl + option** and try:
+`deploy` prints an address such as `https://lat-ai.yourname.workers.dev`. Open it to try the demo site (Acme Cloud, a made-up company with a blog, pricing and a sign-up form). Press **ctrl + option** and try:
 - "find the latest blog post"
 - "why should my team pick this?"
 - On the sign-up page, click **Create account** first, then ask "why won't this submit?"
