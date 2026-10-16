@@ -55,6 +55,12 @@ Other options: `color` (the arrowhead and bubble; the text color adapts), `place
 4. The SDK runs each tool on the page, gliding the arrowhead to each element first, and sends the results back. This repeats until Claude answers in the speech bubble.
 5. If an action loads a new page, the SDK saves the task as the page unloads and carries on when the next page opens.
 
+**Fast judgments with TypeSafe (optional).** If the Worker has a `TYPESAFE_API_KEY`, two quick decisions use [TypeSafe](https://typesafe.ai)'s System One models instead of relying on Claude alone:
+- **"Go ahead?" before anything consequential.** Before a click, an Enter-submit or a site action (plain navigation links are skipped), code asks whether it would commit something hard to undo, such as a purchase, payment, deletion, message or personal details, and whether the user explicitly asked for exactly that. If it's likely consequential and not explicitly requested, the bubble asks the user to approve it before acting. This is enforced in code, not just requested in the prompt.
+- **Cheaper guide check-ins.** After each click during Guide me, TypeSafe judges which plan steps are now done and whether the user has drifted. Finished steps tick off right away, and Claude is only called when a step finished or the user went off course; otherwise nothing happens.
+
+Without the key, both fall back to Claude-only behavior. The thresholds are in `web/cursor-agent.js` (`CONSEQUENTIAL_ACTION_THRESHOLD`, `STEP_COMPLETE_THRESHOLD`, …) and are starting points to tune on real use.
+
 **Safety rails:**
 - Password, one-time-code and payment-card fields are never shown to the agent or typed into.
 - The agent is told to ask before anything irreversible: payments, deleting things, sending messages, or submitting personal details.
@@ -80,6 +86,8 @@ npm run setup                 # installs the Worker's dependencies
 cd worker
 npx wrangler login
 npx wrangler secret put ANTHROPIC_API_KEY
+# optional: fast safety checks and cheaper guide check-ins
+# npx wrangler secret put TYPESAFE_API_KEY
 npx wrangler deploy
 ```
 
@@ -132,6 +140,7 @@ web/
 worker/             Cloudflare Worker: serves web/ and runs agent steps (POST /api/agent)
   src/index.ts      route, access control, site-action validation, Claude call
   src/agent.ts      system prompt (modes) and built-in page tools
+  src/judgments.ts  optional TypeSafe judgments: action risk, guide progress (POST /api/judge)
 extension/          Chrome MV3 extension: injects the SDK everywhere, proxies requests, options page
 scripts/            build-extension.mjs
 ```

@@ -24,6 +24,9 @@
             .catch(reject);
         });
       },
+      requestJudgement(requestBody) {
+        return chrome.runtime.sendMessage({ type: "judge", body: requestBody });
+      },
     },
     persistence: {
       load: () => chrome.runtime.sendMessage({ type: "state-load" }),

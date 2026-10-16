@@ -74,6 +74,11 @@
   const MAX_SCREENSHOT_WIDTH = 1280;
   const SCREENSHOT_JPEG_QUALITY = 0.62;
   const MAX_SCREENSHOT_TAGS = 120;
+  // TypeSafe judgment thresholds (see worker/src/judgments.ts). Starting points to tune on real traffic.
+  const CONSEQUENTIAL_ACTION_THRESHOLD = 0.5;
+  const EXPLICIT_REQUEST_THRESHOLD = 0.85;
+  const STEP_COMPLETE_THRESHOLD = 0.7;
+  const OFF_TRACK_THRESHOLD = 0.6;
   const ANSWER_MIN_LINGER_MS = 6000;
   const ANSWER_LINGER_PER_WORD_MS = 350;
   const CONVERSATION_IDLE_RESET_MS = 5 * 60 * 1000;
@@ -463,6 +468,11 @@
     @keyframes bubble-in { from { opacity: 0; transform: scale(.86) translateY(-3px); } to { opacity: 1; transform: none; } }
     @keyframes bubble-out { to { opacity: 0; transform: scale(.94); } }
     .bubble.error { background: #3b0d0c; color: #fff; }
+    .bubble-actions { display: flex; gap: 6px; margin-top: 9px; }
+    .bubble-button { padding: 5px 12px; border: 0; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer;
+      background: rgba(0,0,0,.08); color: inherit; }
+    .bubble-button.primary { background: var(--agent-ink); color: var(--agent-color); }
+    .bubble-button:hover { filter: brightness(1.08); }
     .bubble.answer { cursor: pointer; }
     .bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
     .bubble.working .bubble-text { display: flex; align-items: center; gap: 8px; }
@@ -509,6 +519,10 @@
             <form class="bubble" hidden aria-live="polite">
               <div class="bubble-text"></div>
               <input class="bubble-input" type="text" autocomplete="off" aria-label="Ask Cursor Agent" hidden>
+              <div class="bubble-actions" hidden>
+                <button type="button" class="bubble-button primary" data-answer="yes">Go ahead</button>
+                <button type="button" class="bubble-button" data-answer="no">Cancel</button>
+              </div>
               <div class="bubble-hint" hidden></div>
             </form>
             <div class="plan-chip" hidden>
@@ -526,6 +540,8 @@
     const bubbleTextElement = select(".bubble-text");
     const bubbleInputElement = select(".bubble-input");
     const bubbleHintElement = select(".bubble-hint");
+    const bubbleActionsElement = select(".bubble-actions");
+    let pendingConfirmation = null; // resolve function while the bubble asks "Go ahead?"
     const planChipElement = select(".plan-chip");
     const planCountElement = select(".plan-count");
     const planTextElement = select(".plan-text");
@@ -563,6 +579,7 @@
       bubbleElement.hidden = false;
       bubbleElement.className = `bubble ${state}`;
       const isInput = state === "input";
+      bubbleActionsElement.hidden = state !== "confirm";
       bubbleInputElement.hidden = !isInput;
       bubbleTextElement.hidden = isInput;
       bubbleHintElement.hidden = !hint;
@@ -583,14 +600,22 @@
       const request = bubbleInputElement.value.trim();
       if (bubbleState === "input" && request) onSubmit(request);
     });
-    bubbleElement.addEventListener("click", () => {
+    bubbleElement.addEventListener("click", (clickEvent) => {
+      const answerButton = clickEvent.target.closest?.("[data-answer]");
+      if (answerButton && pendingConfirmation) {
+        pendingConfirmation(answerButton.dataset.answer === "yes");
+        return;
+      }
       if (bubbleState === "answer" || bubbleState === "error") onAnswerClick();
     });
     select(".plan-end").addEventListener("click", onEndGuide);
     // Keep the page's own shortcuts from firing while typing in the bubble.
     for (const keyboardEventType of ["keydown", "keyup", "keypress"]) {
       bubbleElement.addEventListener(keyboardEventType, (keyboardEvent) => {
-        if (keyboardEvent.key === "Escape" && keyboardEventType === "keydown") onDismiss();
+        if (keyboardEvent.key === "Escape" && keyboardEventType === "keydown") {
+          if (pendingConfirmation) pendingConfirmation(false); // Esc on "Go ahead?" cancels just that action
+          else onDismiss();
+        }
         keyboardEvent.stopPropagation();
       });
     }
@@ -609,6 +634,21 @@
       showAnswer(answerText, lingerMs) {
         setBubble("answer", answerText);
         if (lingerMs) bubbleHideTimeoutId = setTimeout(() => setBubble("hidden"), lingerMs);
+      },
+      /** Asks the user to approve one action; resolves true for "Go ahead", false for Cancel or Esc. */
+      askConfirmation(questionText) {
+        pendingConfirmation?.(false);
+        setBubble("confirm", questionText, { hint: "return to go ahead · esc to cancel" });
+        bubbleElement.querySelector('[data-answer="yes"]').focus({ preventScroll: true });
+        return new Promise((resolve) => {
+          pendingConfirmation = (approved) => {
+            pendingConfirmation = null;
+            resolve(approved);
+          };
+        });
+      },
+      cancelConfirmation() {
+        pendingConfirmation?.(false);
       },
       showError(errorText) {
         setBubble("error", errorText, { hint: "Click to try again · esc to close" });
@@ -780,6 +820,17 @@
         }
         return responseBody;
       },
+      async requestJudgement(requestBody, abortSignal) {
+        const headers = { "content-type": "application/json" };
+        if (options.accessToken) headers["x-cursor-agent-token"] = options.accessToken;
+        const response = await fetch(`${options.endpoint.replace(/\/+$/, "")}/api/judge`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(requestBody),
+          signal: abortSignal,
+        });
+        return response.ok ? response.json() : { available: false };
+      },
     };
   }
 
@@ -836,6 +887,9 @@
     let tabSharePromise = null;
     let tabShareDecisionAwaited = false; // only the first screenshot waits for the visitor to answer the share prompt
     let lastScreenshotScale = null; // screenshot pixels per CSS pixel, for point_at_spot
+    let latestUserRequest = "";
+    let judgementsAvailable = true; // set false once the Worker says TypeSafe isn't configured
+    let guideJudgementInFlight = false;
     let lastActivityAt = Date.now();
     const recentPageErrors = [];
     const pageEventListeners = [];
@@ -946,6 +1000,7 @@
     /** Ends a running task, leaving the conversation valid for a follow-up. */
     function stopTask() {
       if (!currentAbortController) return;
+      agentInterface.cancelConfirmation();
       currentAbortController.abort();
       currentAbortController = null;
       closeDanglingToolUses("Cancelled by the user.");
@@ -1110,6 +1165,58 @@
       ];
     }
 
+    // ---------- fast judgments (TypeSafe, optional) ----------
+
+    /** Returns the Worker's judgment, or null when TypeSafe isn't set up or the call fails. */
+    async function requestJudgement(kind, state) {
+      if (!judgementsAvailable || !transport.requestJudgement) return null;
+      try {
+        const judgement = await transport.requestJudgement({ kind, state });
+        if (!judgement?.available) {
+          if (!judgement?.error) judgementsAvailable = false; // not configured: stop asking
+          return null;
+        }
+        return judgement;
+      } catch {
+        return null;
+      }
+    }
+
+    /** Plain links that only navigate don't need a safety check; known rules stay in code. */
+    function isPlainNavigationLink(element) {
+      const linkTarget = element.closest("a[href]")?.getAttribute("href") ?? "";
+      return Boolean(linkTarget) && !linkTarget.startsWith("javascript:") && !element.closest("form");
+    }
+
+    /**
+     * Before an action that might commit something (a purchase, a send, a delete),
+     * ask TypeSafe; if it's likely consequential and the user didn't ask for exactly
+     * that, the bubble asks them to approve it. Returns true to go ahead.
+     */
+    async function confirmIfConsequential(actionDescription, target, targetElement) {
+      const surroundingElement = targetElement?.closest("form, section, article, [role='dialog'], dialog, main") ?? null;
+      const judgement = await requestJudgement("action-risk", {
+        userRequest: latestUserRequest,
+        site: location.hostname,
+        pageTitle: document.title,
+        action: actionDescription,
+        target,
+        surroundingText: collapseWhitespace(surroundingElement?.innerText ?? "", 2000),
+      });
+      if (!judgement) return true; // no judgment available: rely on the agent's instructions
+      const needsApproval =
+        judgement.consequential >= CONSEQUENTIAL_ACTION_THRESHOLD && judgement.explicitlyRequested < EXPLICIT_REQUEST_THRESHOLD;
+      if (!needsApproval) return true;
+      const targetName = targetElement ? getAccessibleName(targetElement) || describeElementKind(targetElement) : target;
+      const approved = await agentInterface.askConfirmation(`This looks like it can't be undone: ${collapseWhitespace(targetName, 60)}. Go ahead?`);
+      if (approved) narrate(`Going ahead with ${collapseWhitespace(targetName, 40)}`);
+      return approved;
+    }
+
+    const DECLINED_RESULT = {
+      text: "The user declined this action when asked to confirm. Don't retry it; say what you would have done and let them decide.",
+    };
+
     // ---------- tools ----------
 
     async function moveCursorToElement(element, label) {
@@ -1155,6 +1262,9 @@
 
         case "click": {
           await moveCursorToElement(targetElement, null);
+          if (!isPlainNavigationLink(targetElement) && !(await confirmIfConsequential("click", describeElement(targetElement), targetElement))) {
+            return DECLINED_RESULT;
+          }
           agentInterface.pulseClick();
           const urlBeforeClick = location.href;
           targetElement.focus?.({ preventScroll: true });
@@ -1179,6 +1289,7 @@
             return { text: `[${toolInput.element_id}] isn't a text field.`, isError: true };
           }
           if (toolInput.press_enter) {
+            if (!(await confirmIfConsequential("press Enter in", describeElement(targetElement), targetElement))) return DECLINED_RESULT;
             const enterKeyOptions = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
             const enterNotHandled = targetElement.dispatchEvent(new KeyboardEvent("keydown", enterKeyOptions));
             targetElement.dispatchEvent(new KeyboardEvent("keyup", enterKeyOptions));
@@ -1250,6 +1361,8 @@
           if (!siteAction) {
             return { text: `Unknown tool ${toolUse.name}.`, isError: true };
           }
+          const siteActionTarget = `the site's "${toolUse.name}" action (${siteAction.description ?? ""}) with ${JSON.stringify(toolInput)}`;
+          if (!(await confirmIfConsequential("run", siteActionTarget, null))) return DECLINED_RESULT;
           const siteActionResult = await siteAction.run(toolInput);
           const resultText = typeof siteActionResult === "string" ? siteActionResult : JSON.stringify(siteActionResult ?? "done");
           return { text: collapseWhitespace(resultText, MAX_TOOL_RESULT_CHARACTERS) || "done" };
@@ -1364,6 +1477,7 @@
 
     async function runTask(request, modeKey) {
       requestTabShareDuringUserGesture(); // must happen before anything awaits
+      latestUserRequest = request;
       if (!hasRecentConversation() && !activePlan) conversationMessages = [];
       const abortController = beginWorking();
       currentStepCount = 0;
@@ -1395,8 +1509,49 @@
       guideCheckInTimeoutId = setTimeout(() => runGuideCheckIn(userActivityDescription), GUIDE_CHECK_IN_DELAY_MS);
     }
 
+    /**
+     * Asks TypeSafe whether the user's latest action finished any plan steps or
+     * took them off course. Returns { needsAgent, finishedSteps }, or null when
+     * judgments aren't available (then every check-in goes to the agent).
+     */
+    async function judgeGuideProgressQuietly(userActivityDescription) {
+      const judgement = await requestJudgement("guide-progress", {
+        goal: activePlan.goal,
+        steps: activePlan.steps.map((planStep, index) => ({ number: index + 1, text: planStep.text, done: planStep.done })),
+        lastUserAction: userActivityDescription,
+        page: refreshSnapshot(),
+      });
+      if (!judgement || !activePlan) return null;
+      const finishedSteps = Object.entries(judgement.stepCompletion ?? {})
+        .filter(([, completionProbability]) => completionProbability >= STEP_COMPLETE_THRESHOLD)
+        .map(([stepNumber]) => Number(stepNumber));
+      for (const stepNumber of finishedSteps) {
+        if (activePlan.steps[stepNumber - 1]) activePlan.steps[stepNumber - 1].done = true;
+      }
+      if (finishedSteps.length) agentInterface.renderPlan(activePlan);
+      return { needsAgent: finishedSteps.length > 0 || judgement.offTrack >= OFF_TRACK_THRESHOLD, finishedSteps };
+    }
+
     async function runGuideCheckIn(userActivityDescription) {
-      if (!activePlan || currentAbortController || guideCheckInCount >= MAX_GUIDE_CHECK_INS) return;
+      if (!activePlan || currentAbortController || guideJudgementInFlight || guideCheckInCount >= MAX_GUIDE_CHECK_INS) return;
+
+      // A quick judgment first; most clicks don't change anything worth a full agent turn.
+      guideJudgementInFlight = true;
+      let quickProgress = null;
+      try {
+        quickProgress = await judgeGuideProgressQuietly(userActivityDescription);
+      } finally {
+        guideJudgementInFlight = false;
+      }
+      if (!activePlan || currentAbortController) return;
+      if (quickProgress && !quickProgress.needsAgent) {
+        persistence.save(buildSavedState());
+        return;
+      }
+      if (quickProgress?.finishedSteps.length) {
+        userActivityDescription += ` (Already ticked off from the page: step ${quickProgress.finishedSteps.join(", step ")}.)`;
+      }
+
       guideCheckInCount++;
       compactGuideConversationIfLong();
       const abortController = beginWorking();

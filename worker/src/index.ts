@@ -5,10 +5,14 @@
  * files, and runs agent steps for the SDK so the Anthropic key never reaches
  * a browser.
  *
- * Route:
+ * Routes:
  *   POST /api/agent → one Claude step: { messages, siteActions } in,
  *                      { content, stop_reason, stop_details } out.
  *                      The SDK runs the tools on the page and calls again.
+ *   POST /api/judge → a fast TypeSafe judgment (see judgments.ts):
+ *                      { kind: "action-risk" | "guide-progress", state } in,
+ *                      { available, ...probabilities } out. Optional: without
+ *                      TYPESAFE_API_KEY it answers { available: false }.
  *
  * Access control: browsers may only call /api/agent from this Worker's own
  * origin or an origin listed in ALLOWED_ORIGINS (sites embedding the SDK, or
@@ -18,6 +22,8 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { AGENT_SYSTEM_PROMPT, BUILT_IN_TOOLS, BUILT_IN_TOOL_NAMES } from "./agent";
+import { createSystemOneAsker, judgeActionRisk, judgeGuideProgress } from "./judgments";
+import type { ActionRiskState, GuideProgressState } from "./judgments";
 
 interface Env {
   ANTHROPIC_API_KEY: string;
@@ -25,6 +31,7 @@ interface Env {
   AGENT_EFFORT?: string;
   ALLOWED_ORIGINS?: string;
   ACCESS_TOKEN?: string;
+  TYPESAFE_API_KEY?: string;
 }
 
 interface SiteAction {
@@ -76,6 +83,9 @@ export default {
     try {
       if (url.pathname === "/api/agent") {
         return await handleAgentStep(request, env, corsHeaders);
+      }
+      if (url.pathname === "/api/judge") {
+        return await handleJudgement(request, env, corsHeaders);
       }
     } catch (error) {
       console.error(`[${url.pathname}] Unhandled error:`, error);
@@ -212,5 +222,38 @@ async function handleAgentStep(request: Request, env: Env, corsHeaders: Record<s
       return jsonResponse({ error: `Claude: ${error.message}` }, status, corsHeaders);
     }
     throw error;
+  }
+}
+
+async function handleJudgement(request: Request, env: Env, corsHeaders: Record<string, string>): Promise<Response> {
+  if (!env.TYPESAFE_API_KEY) {
+    return jsonResponse({ available: false }, 200, corsHeaders);
+  }
+  const requestBodyText = await request.text();
+  if (requestBodyText.length > 100_000) {
+    return jsonResponse({ error: "Judgement state too large" }, 413, corsHeaders);
+  }
+  const { kind, state } = JSON.parse(requestBodyText) as { kind: string; state: unknown };
+  if (!state || typeof state !== "object") {
+    return jsonResponse({ error: "state must be an object" }, 400, corsHeaders);
+  }
+
+  const askSystemOne = createSystemOneAsker(env.TYPESAFE_API_KEY);
+  try {
+    if (kind === "action-risk") {
+      return jsonResponse({ available: true, ...(await judgeActionRisk(askSystemOne, state as ActionRiskState)) }, 200, corsHeaders);
+    }
+    if (kind === "guide-progress") {
+      const guideState = state as GuideProgressState;
+      if (!Array.isArray(guideState.steps)) {
+        return jsonResponse({ error: "state.steps must be an array" }, 400, corsHeaders);
+      }
+      return jsonResponse({ available: true, ...(await judgeGuideProgress(askSystemOne, guideState)) }, 200, corsHeaders);
+    }
+    return jsonResponse({ error: `Unknown judgement kind: ${kind}` }, 400, corsHeaders);
+  } catch (error) {
+    // The SDK falls back to its Claude-only behavior when a judgement isn't available.
+    console.error(`[/api/judge] TypeSafe ${kind} failed:`, error);
+    return jsonResponse({ available: false, error: String(error) }, 200, corsHeaders);
   }
 }

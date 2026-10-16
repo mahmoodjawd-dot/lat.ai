@@ -21,3 +21,4 @@ ALLOWED_ORIGINS = "chrome-extension://demcokifljpiejahdcgflfpidfkjdnhp"
 # Secrets (set with `npx wrangler secret put <NAME>`, never in this file):
 #   ANTHROPIC_API_KEY (required)
 #   ACCESS_TOKEN      (optional: require x-cursor-agent-token on every request)
+#   TYPESAFE_API_KEY  (optional: fast safety checks before risky actions, cheaper guide check-ins)

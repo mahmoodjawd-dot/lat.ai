@@ -7,7 +7,8 @@
     "tail": "wrangler tail"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.134.0"
+    "@anthropic-ai/sdk": "^0.134.0",
+    "@typesafe-ai/sdk": "^0.7.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261015.1",

@@ -42,6 +42,20 @@ async function requestAgentStep(requestBody) {
   }
 }
 
+/** Optional TypeSafe judgments; any failure just means "not available" so the SDK falls back. */
+async function requestJudgement(requestBody) {
+  const { endpoint, accessToken } = await readSettings();
+  if (!endpoint) return { available: false };
+  const headers = { "content-type": "application/json" };
+  if (accessToken) headers["x-cursor-agent-token"] = accessToken;
+  try {
+    const response = await fetch(`${endpoint}/api/judge`, { method: "POST", headers, body: JSON.stringify(requestBody) });
+    return response.ok ? await response.json() : { available: false, error: `HTTP ${response.status}` };
+  } catch (error) {
+    return { available: false, error: error.message };
+  }
+}
+
 const tabStateKey = (tabId) => `tab-state-${tabId}`;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -50,6 +64,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "agent-step":
       requestAgentStep(message.body).then(sendResponse);
       return true; // respond asynchronously
+    case "judge":
+      requestJudgement(message.body).then(sendResponse);
+      return true;
     case "state-load":
       chrome.storage.session.get(tabStateKey(tabId)).then((stored) => sendResponse(stored[tabStateKey(tabId)] ?? null));
       return true;
