@@ -1,12 +1,16 @@
 name = "lat-ai"
-main = "src/index.ts"
+main = "worker/src/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
-# ../web holds the SDK (cursor-agent.js) and a small demo site, served as
+# web/ holds the SDK (cursor-agent.js) and a small demo site, served as
 # static files from the same Worker as /api/agent.
 [assets]
-directory = "../web"
+directory = "web"
+
+# Lets Cloudflare's builds run `wrangler preview` for pull requests and other
+# non-production branches. Empty: previews use the settings above.
+[previews]
 
 [vars]
 # Claude model for the agent.

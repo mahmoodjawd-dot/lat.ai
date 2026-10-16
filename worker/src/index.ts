@@ -1,7 +1,7 @@
 /**
  * Cursor Agent Worker
  *
- * Serves the SDK (/cursor-agent.js) and the demo site from ../web as static
+ * Serves the SDK (/cursor-agent.js) and the demo site from web/ as static
  * files, and runs agent steps for the SDK so the Anthropic key never reaches
  * a browser.
  *

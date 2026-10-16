@@ -70,7 +70,7 @@ Without the key, both fall back to Claude-only behavior. The thresholds are in `
 ## Setup without a terminal (all in the browser)
 
 1. In the [Cloudflare dashboard](https://dash.cloudflare.com), go to **Workers & Pages → Create → Import a repository**. Connect GitHub and pick this repo.
-2. Set **Project name** to `lat-ai` (it must match `name` in `worker/wrangler.toml`), **Root directory** to `worker`, **Build command** to `npm install`, and **Deploy command** to `npx wrangler deploy`. Choose the branch that has this code.
+2. Set **Project name** to `lat-ai` (it must match `name` in `wrangler.toml`) and keep the defaults: root directory `/`, deploy command `npx wrangler deploy`. Pull requests and other branches get preview builds (`npx wrangler preview`) automatically. Choose the branch that has this code.
 3. After the first deploy, open the Worker, go to **Settings → Variables and Secrets → Add**, choose type **Secret**, and name it `ANTHROPIC_API_KEY`. Paste your key as the value and click **Deploy**.
 4. Open the `*.workers.dev` address shown on the Worker's page.
 
@@ -83,7 +83,6 @@ You need Node.js 20+, a free Cloudflare account, and an [Anthropic](https://cons
 
 ```bash
 npm run setup                 # installs the Worker's dependencies
-cd worker
 npx wrangler login
 npx wrangler secret put ANTHROPIC_API_KEY
 # optional: fast safety checks and cheaper guide check-ins
@@ -97,7 +96,7 @@ npx wrangler deploy
 - On the sign-up page, click **Create account** first, then ask "why won't this submit?"
 - "help me create an account"
 
-To embed it on another site, add that site's origin to `ALLOWED_ORIGINS` in `worker/wrangler.toml` and redeploy.
+To embed it on another site, add that site's origin to `ALLOWED_ORIGINS` in `wrangler.toml` and redeploy.
 
 **Recommended: require a password.** Run `npx wrangler secret put ACCESS_TOKEN` and pass the same value as `accessToken` (or enter it in the extension's options). The origin check only stops other websites in a browser; without a token, anyone who calls the Worker directly (curl, a script) can use your API credits. On a public website the token sits in the page's source, so it mainly protects private setups and the extension.
 
@@ -107,7 +106,7 @@ If you change `web/cursor-agent.js`, run `npm run build:extension` to copy it in
 
 1. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and choose the `extension` folder.
 2. The options page opens. Paste your Worker address and copy the `chrome-extension://…` origin it shows.
-3. Add that origin to `ALLOWED_ORIGINS` in `worker/wrangler.toml` and run `npx wrangler deploy` again.
+3. Add that origin to `ALLOWED_ORIGINS` in `wrangler.toml` and run `npx wrangler deploy` again.
 4. On any page, press **ctrl + option**, click the toolbar icon, or press **Alt + Shift + K**.
 
 Chrome doesn't let extensions run on its own pages (`chrome://`) or the Web Store. Re-run `npm run build:extension` and reload the extension whenever the SDK changes.
@@ -115,21 +114,20 @@ Chrome doesn't let extensions run on its own pages (`chrome://`) or the Web Stor
 ### Local development
 
 ```bash
-cd worker
 printf 'ANTHROPIC_API_KEY=...\n' > .dev.vars   # gitignored
 npm run dev                                     # http://localhost:8787
 ```
 
 ## Settings
 
-In `worker/wrangler.toml`:
+In `wrangler.toml`:
 - `CLAUDE_MODEL` (default `claude-opus-5-5`)
 - `AGENT_EFFORT` (default `low` for speed; raise to `medium` or `high` for harder multi-step tasks)
 - `ALLOWED_ORIGINS`
 
 The Worker opts into Claude's server-side refusal fallback: if a request is declined by a safety classifier, it's retried on Anthropic's recommended fallback model. The system prompt and tools are prompt-cached, so the later steps of a task are cheaper.
 
-Run `npm --prefix worker run tail` to watch the Worker's logs live.
+Run `npm run tail` to watch the Worker's logs live.
 
 ## Project layout
 
@@ -137,6 +135,7 @@ Run `npm --prefix worker run tail` to watch the Worker's logs live.
 web/
   cursor-agent.js   the SDK: silver arrowhead cursor, glass speech bubble, page snapshot, screenshots, tools, agent loop (no dependencies)
   index.html, blog.html, blog/, signup.html, demo.css, demo.js   the Acme Cloud demo site
+wrangler.toml       Worker settings (name, vars, previews)
 worker/             Cloudflare Worker: serves web/ and runs agent steps (POST /api/agent)
   src/index.ts      route, access control, site-action validation, Claude call
   src/agent.ts      system prompt (modes) and built-in page tools
